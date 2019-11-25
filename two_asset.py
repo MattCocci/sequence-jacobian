@@ -3,6 +3,8 @@ from numba import njit
 import utils
 from het_block import het
 from simple_block import simple
+from solved_block import solved
+
 
 
 '''Part 1: HA block'''
@@ -49,7 +51,20 @@ def household(Va_p, Vb_p, Pi_p, a_grid, b_grid, z_grid, e_grid, k_grid, beta, ei
     Va = (1 + ra - Psi2) * uc
     Vb = (1 + rb) * uc
 
-    return Va, Vb, a, b, c, u
+    # Variance and covariance terms
+    a2 = a**2
+    b2 = b**2
+    c2 = c**2
+    z2 = (np.ones((nZ, nB, nA))*z_grid[:,np.newaxis, np.newaxis])**2
+ 
+    cz = c * z_grid[:,np.newaxis, np.newaxis]
+    az = a * z_grid[:,np.newaxis, np.newaxis]
+    bz = b * z_grid[:,np.newaxis, np.newaxis]
+    ac = a * c
+    bc = b * c
+    ab = a * b
+
+    return Va, Vb, a, b, c, u,   a2, b2, c2, z2, cz, az, bz, ac, bc, ab
 
 
 def post_decision_vfun(Va_p, Vb_p, Pi, beta):
@@ -170,13 +185,15 @@ def step6(ap_endo, c_endo, z_grid, b_grid, a_grid, ra, rb, chi0, chi1, chi2):
 '''Part 2: Simple blocks'''
 
 
-@simple
+@solved(unknowns=['pi'], targets=['nkpc'])
 def pricing(pi, mc, r, Y, kappap, mup):
     nkpc = kappap * (mc - 1/mup) + Y(+1) / Y * np.log(1 + pi(+1)) / (1 + r(+1)) - np.log(1 + pi)
     return nkpc
 
 
-@simple
+
+# @simple
+@solved(unknowns=['p'], targets=['equity'])
 def arbitrage(div, p, r):
     equity = div(+1) + p(+1) - p * (1 + r(+1))
     return equity
@@ -225,6 +242,55 @@ def finance(i, p, pi, r, div, omega, pshare):
     return rb, ra, fisher
 
 
+# @simple
+# def microVarA(A, A2):
+    # VarA = A2 - A**2
+    # return VarA
+
+# @simple
+# def microVarB(B, B2):
+    # VarB = B2 - B**2
+    # return VarB
+
+# @simple
+# def microVarC(C, C2):
+    # VarC = C2 - C**2
+    # return VarC
+
+# @simple
+# def microCovAC(A, C, AC):
+    # CovAC = AC - C*A
+    # return CovAC
+
+# @simple
+# def microCovBC(B, C, BC):
+    # CovBC = BC - B*C
+    # return CovBC
+
+# @simple
+# def microCovCZ(C, Z, CZ):
+    # CovCZ = CZ - C*Z
+    # return CovCZ
+
+
+# For getting regression coeff of consumption on income
+@simple
+def microBetaCZ(C, Z, Z2, CZ):
+    BetaCZ = (CZ - C*Z) / (Z2 - Z**2)
+    return BetaCZ
+
+@simple
+def microBetaCA(C, A, A2, AC):
+    BetaCA = (AC - A*C) / (A2 - A**2)
+    return BetaCA
+
+@simple
+def microBetaCB(C, B, B2, BC):
+    BetaCB = (BC - B*C) / (B2 - B**2)
+    return BetaCB
+
+
+
 @simple
 def wage(pi, w, N, muw, kappaw):
     piw = (1 + pi) * w / w(-1) - 1
@@ -250,6 +316,11 @@ def income(e_grid, tax, w, N):
 
 
 household_inc = household.attach_hetinput(income)
+
+
+production = solved(block_list=[labor, investment],
+                    unknowns=['Q', 'K'],
+                    targets=['inv', 'val'])
 
 
 '''Part 3: Steady state'''
