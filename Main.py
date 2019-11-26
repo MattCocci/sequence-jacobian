@@ -18,18 +18,7 @@ import time
 
 
 
-# Smets wouters
-
-# Exogenous Shocks
-# - shocks to TFP: In there already
-# - government spending: In there already
-# - monetary policy: rstar, in there already
-# - price and wage markups
-# - discount factor shocks, rather than risk premium shocks: Put that in
-# - firms' FOC for capital, instead of investment-spec tech shocks
-
 # Outputs
-# - output
 # - consumption
 # - investment
 # - hours
@@ -137,8 +126,8 @@ def SolveModel(theta, T, ss, use_saved, runcode):
 
     # (Re)Compute Jacobians
     if (runcode == 0) or (runcode == 1):
-        exogenous  = ['rstar', 'Z', 'G']
-        unknowns   = ['r', 'w', 'Y']
+        exogenous  = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
+        unknowns   = ['Y', 'r', 'w']
     targets    = ['asset_mkt', 'fisher', 'wnkpc']
     block_list = [household_inc, pricing, arbitrage, production,
                   dividend, taylor, fiscal, finance, wage, union, mkt_clearing,
@@ -512,7 +501,7 @@ def paramsCheckID(runcode):
 
 
 def getruncodeFeatures(runcode):
-    inputs  = ['Z', 'rstar', 'G']
+    inputs  = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
     # outputs = ['Y', 'C', 'K']
     # outputs = ['Y', 'r', 'pi', 'VarA', 'VarB', 'VarC', 'CovAC', 'CovBC', 'CovCZ']
     outputs = ['Y', 'r', 'pi', 'BetaCZ', 'BetaCA', 'BetaCB']

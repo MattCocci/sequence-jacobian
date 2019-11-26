@@ -182,18 +182,25 @@ def step6(ap_endo, c_endo, z_grid, b_grid, a_grid, ra, rb, chi0, chi1, chi2):
     return ap
 
 
+def income(e_grid, tax, w, N):
+    z_grid = (1 - tax) * w * N * e_grid
+    return z_grid
+
+
+household_inc = household.attach_hetinput(income)
+
 '''Part 2: Simple blocks'''
 
 
-@solved(unknowns=['pi'], targets=['nkpc'])
-def pricing(pi, mc, r, Y, kappap, mup):
-    nkpc = kappap * (mc - 1/mup) + Y(+1) / Y * np.log(1 + pi(+1)) / (1 + r(+1)) - np.log(1 + pi)
+# @solved(unknowns=['pi'], targets=['nkpc'])
+@simple
+def pricing(pi, mc, r, Y, kappap, mup, markup):
+    nkpc = kappap * (mc - 1/mup) + Y(+1) / Y * np.log(1 + pi(+1)) / (1 + r(+1)) + markup - np.log(1 + pi)
     return nkpc
 
 
 
-# @simple
-@solved(unknowns=['p'], targets=['equity'])
+@simple
 def arbitrage(div, p, r):
     equity = div(+1) + p(+1) - p * (1 + r(+1))
     return equity
@@ -207,10 +214,10 @@ def labor(Y, w, K, Z, alpha):
 
 
 @simple
-def investment(Q, K, r, N, mc, Z, delta, epsI, alpha):
+def investment(Q, K, r, N, mc, Z, delta, epsI, alpha, rinv_shock):
     inv = (K/K(-1) - 1) / (delta * epsI) + 1 - Q
     val = alpha * Z(+1) * (N(+1) / K) ** (1-alpha) * mc(+1) - (K(+1)/K -
-           (1-delta) + (K(+1)/K - 1)**2 / (2*delta*epsI)) + K(+1)/K*Q(+1) - (1 + r(+1))*Q
+           (1-delta) + (K(+1)/K - 1)**2 / (2*delta*epsI)) + K(+1)/K*Q(+1) - (1 + r(+1) + rinv_shock)*Q
     return inv, val
 
 
@@ -299,8 +306,8 @@ def wage(pi, w, N, muw, kappaw):
 
 
 @simple
-def union(piw, N, tax, w, U, kappaw, muw, vphi, frisch, beta):
-    wnkpc = kappaw * (vphi * N**(1+1/frisch) - muw*(1-tax)*w*N*U) + beta * np.log(1 + piw(+1)) - np.log(1 + piw)
+def union(piw, N, tax, w, U, kappaw, muw, vphi, frisch, beta, markup_w):
+    wnkpc = kappaw * (vphi * N**(1+1/frisch) - muw*(1-tax)*w*N*U) + beta * np.log(1 + piw(+1)) + markup_w - np.log(1 + piw)
     return wnkpc
 
 
@@ -310,12 +317,6 @@ def mkt_clearing(p, A, B, Bg):
     return asset_mkt
 
 
-def income(e_grid, tax, w, N):
-    z_grid = (1 - tax) * w * N * e_grid
-    return z_grid
-
-
-household_inc = household.attach_hetinput(income)
 
 
 production = solved(block_list=[labor, investment],
@@ -388,5 +389,6 @@ def hank_ss(beta_guess=0.976, vphi_guess=2.07, chi1_guess=6.5, r=0.0125, tot_wea
                'div': div, 'p': p, 'r': r, 'Bg': Bg, 'G': G, 'Chi': Chi, 'goods_mkt': goods_mkt, 'chi': chi, 'phi': phi,
                'beta': beta, 'vphi': vphi, 'omega': omega, 'alpha': alpha, 'delta': delta, 'mup': mup, 'muw': muw,
                'frisch': frisch, 'epsI': epsI, 'a_grid': a_grid, 'b_grid': b_grid, 'z_grid': z_grid, 'e_grid': e_grid,
+               'markup': 0, 'markup_w': 0, 'rinv_shock': 0,
                'k_grid': k_grid, 'Pi': Pi, 'kappap': kappap, 'kappaw': kappaw, 'pshare': pshare, 'rstar': r, 'i': r})
     return ss
