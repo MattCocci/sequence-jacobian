@@ -3,6 +3,8 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from scipy.misc import derivative
 from scipy.optimize import minimize, linprog
+import time
+import warnings
 
 
 
@@ -128,8 +130,9 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
 
     # For the purposes of calculations, make sure all n-dim arrays are
     # (n x 1) arrays
-    theta0 = np.reshape(theta0, (k,1))
-    muhat  = np.reshape(muhat, (p,1))
+    theta0     = np.reshape(theta0, (k,1))
+    theta_true = np.reshape(theta0, (k,1))
+    muhat      = np.reshape(muhat, (p,1))
     if len(lamb) < len(theta_true):
         lambda_ = np.hstack([lamb,0])
     else:
@@ -143,7 +146,7 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     fullV = not np.any(np.isnan(V))
 
     # Set up estimation function
-    estimateFcn = lambda theta0, W: computeCMDEst(muhat, h, theta0, W)
+    estimateFcn = lambda theta0, W: computeCMDEst(muhat, h, theta0, l, u, W)
 
 
     ######################################################
@@ -152,9 +155,12 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     ######################################################
 
     G = {}
+    print("Estimating G_true...")
     G['true'] = GFcn(theta_true)
+    print(G['true'])
     if np.linalg.matrix_rank(G['true']) < k:
         print('Warning: G of deficient rank at true parameter')
+    print("DONE")
 
 
     ######################################################
@@ -168,7 +174,10 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     res['naive']['name']  = 'Naive'
     res['naive']['V']     = np.diag(np.diag(V))
     res['naive']['W']     = np.linalg.inv(res['naive']['V'])
+    print("Estimating theta_naive...", end="")
     res['naive']['theta'] = estimateFcn(theta0, res['naive']['W'])
+    print("Done.")
+    print(res['naive']['theta'])
     res['naive']['h']     = h(res['naive']['theta'])
     if res['naive']['h'].shape != (p,1):
         raise Exception('h must have shape (p,1). Check not (p,) or (1,p)')
@@ -179,13 +188,16 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
 
     # G to use in constructing asysmptotic variance eestimators
     if fullyFeasible:
+        print(theta_true)
+        print(res['naive']['theta'])
         G['naive'] = GFcn(res['naive']['theta'])
+        print(np.abs(G['naive']-G['true'])/G['true'])
         Guse       = G['naive']
     else:
         Guse = G['true']
 
     # Construct function for getting onstep estimator
-    getOnestep = lambda W: getOnestep_(res['naive']['h'], W, Guse, res['naive']['theta'], muhat)
+    getOnestep = lambda W: getOnestep_(res['naive']['h'], W, Guse, res['naive']['theta'], muhat, l, u)
 
 
     # Worst-case optimal
@@ -200,7 +212,10 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
         res['wcopt']['x_check'], \
         res['wcopt']['z_check']         = ComputeWorstCaseOptimal_Single(V, Guse, lambda_, zero_thresh)
     res['wcopt']['stderr_check']        = res['wcopt']['stderr_check'] / np.sqrt(Nobs)
+    print("Estimating theta_wcopt...", end="")
     res['wcopt']['theta']               = estimateFcn(theta0_use, res['wcopt']['W'])
+    print("Done.")
+    print(res['wcopt']['theta'])
 
     # Ensure psd
     #[V_, D_] = eig(res.wcopt.W);
@@ -217,7 +232,10 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     res['wcopt_onestep']['name']        = 'Worst-Case Optimal, One-Step'
     res['wcopt_onestep']['V']           = res['wcopt']['V']
     res['wcopt_onestep']['W']           = res['wcopt']['W']
+    print("Estimating wcopt_onestep...", end="")
     res['wcopt_onestep']['theta']       = getOnestep(res['wcopt_onestep']['W'])
+    print("Done.")
+    print(res['wcopt_onestep']['theta'])
     res['wcopt_onestep']['lcomb_check'] = np.vdot(lambda_, res['naive']['theta']) - np.vdot(res['wcopt']['x_check'], (res['naive']['h']-muhat))
 
 
@@ -229,17 +247,22 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
         res['opt']['name']  = 'Full-Info Optimal'
         res['opt']['V']     = V
         res['opt']['W']     = np.linalg.inv(V)
+        print("Estimating theta_opt...", end="")
         res['opt']['theta'] = estimateFcn(theta0_use, res['opt']['W'])
+        print(res['opt']['theta'])
+        print("Done.")
 
         res['opt_onestep']          = {}
         res['opt_onestep']['name']  = 'Full-Info Optimal, One-Step'
         res['opt_onestep']['V']     = res['opt']['V']
         res['opt_onestep']['W']     = np.linalg.inv(res['opt']['V'])
+        print("Estimating opt_onestep...", end="")
         res['opt_onestep']['theta'] = getOnestep(res['opt_onestep']['W'])
+        print(res['opt_onestep']['theta'])
+        print("Done.")
     else:
         res['opt']         = []
         res['opt_onestep'] = []
-
 
 
     ######################################################
@@ -275,9 +298,20 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
 
 
 # Construct function for getting onstep estimator
-def getOnestep_(h0, W, G, theta0, muhat):
+def getOnestep_(h0, W, G, theta0, muhat, l, u):
+    #print("diff")
+    #print(np.linalg.inv(G.T @ W @ G))
+    #print(G.T @ W)
+    #print(h0-muhat)
+    #print("blah")
     subtr = np.linalg.solve(G.T @ W @ G,  G.T @ W @ (h0-muhat))
-    return np.reshape(theta0[0:len(subtr)] - subtr, (theta0.shape[0],1))
+    theta = np.reshape(theta0[0:len(subtr)] - subtr, (len(theta0),1))
+    k     = len(theta)
+    print(theta0)
+    print(subtr)
+    print(theta)
+    theta = np.minimum(np.maximum(theta, l[:k]), u[:k])
+    return theta
 
 
 # Compute variance
@@ -294,6 +328,8 @@ def FiniteDiff(h, theta, h_theta, v_perturb):
     converged        = False   # Whether computed derivative has converged
     iters            = 0       # Flag the first run trhough
     maxabspctchg_old = np.inf
+    # p, k             = len(h_theta), len(theta)
+    # print(v_perturb)
     while not converged:
 
         # Perturb the parameter vector in direction of v_perturb
@@ -301,8 +337,13 @@ def FiniteDiff(h, theta, h_theta, v_perturb):
         theta_bwd = theta - delta*v_perturb
 
         # Compute h under each perturbed theta value
+        tic = time.perf_counter()
         h_fwd = h(theta_fwd)
+        # print(time.perf_counter()-tic)
+
+        tic = time.perf_counter()
         h_bwd = h(theta_bwd)
+        # print(time.perf_counter()-tic)
 
         # Compute estimate of derivativ
         d_fwd = (h_fwd - h_theta)/delta
@@ -358,9 +399,11 @@ def quadForm(A, x):
     return x.T @ A @ x
 
 
-def computeCMDEst(muhat, h, theta0, W):
+def computeCMDEst(muhat, h, theta0, l, u, W):
     objfcn = lambda theta: quadForm(W, muhat-h(theta)).sum()
-    res    = minimize(objfcn, theta0, options={'disp' : False}, tol=1e-6)
+    bounds = tuple(zip(l,u))
+    res    = minimize(objfcn, theta0, options={'disp' : True, 'maxiter' : 20}, bounds=bounds, callback=lambda x: print(x), tol=1e-4)
+    print(res.jac)
     return np.reshape(res.x, (theta0.shape[0],1))
 
 
