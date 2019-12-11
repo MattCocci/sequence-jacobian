@@ -15,16 +15,11 @@ import nonlinear
 import determinacy as det
 import estimation as est
 import time
+import wcopt
+import warnings
 
 
-
-# Outputs
-# - consumption
-# - investment
-# - hours
-# - wages
-# - nominal interest rates
-# - price inflation
+warnings.simplefilter('error')
 
 
 
@@ -83,38 +78,27 @@ import time
 
 
 # Solve Model: Get steady state and Jacobian for some set of parameters, or just Jacobian if ss unchanged
-def SolveModel(theta, T, ss, use_saved, runcode):
+def SolveModel(runcode, theta, T, ss, exogenous, outputs, unknowns, targets, block_list, use_saved):
 
-    if theta == []:
-        # Use defaults
-        theta_use = paramsDefaults(runcode)
+    # If no parameters provided, use defaults
+    if np.size(theta) == 0:
+        theta_use, shock_param = paramsDefaults(runcode)
     else:
         theta_use = theta
 
-
+    # SOLVE FOR STEADY STATE if none provided, make sure parameters
+    # are set to the the values in theta within ss so Jacobian
+    # computation uses parameters in theta, not original parameter
+    # values still in ss
     if runcode == 0:
-        # Set parameters
         phi = theta_use[0]
-
-        # Solve for steady state if none provided, make sure parameters
-        # are set to the the values in theta within ss so Jacobian
-        # computation uses parameters in theta, not original parameter
-        # values still in ss
         if ss == []:
             print('Recomputing steady state')
             ss = hank_ss(phi=phi, noisy=False)
         else:
-            ss['phi']    = phi
-
-
+            ss['phi'] = phi
     if runcode == 1:
-        # Set parameters
         phi, kappap = theta_use[0:2]
-
-        # Solve for steady state if none provided, make sure parameters
-        # are set to the the values in theta within ss so Jacobian
-        # computation uses parameters in theta, not original parameter
-        # values still in ss
         if ss == []:
             print('Recomputing steady state')
             ss = hank_ss(kappap=kappap, phi=phi, noisy=False)
@@ -123,25 +107,17 @@ def SolveModel(theta, T, ss, use_saved, runcode):
             ss['kappap'] = kappap
 
 
-
     # (Re)Compute Jacobians
-    if (runcode == 0) or (runcode == 1):
-        exogenous  = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
-        unknowns   = ['Y', 'r', 'w']
-    targets    = ['asset_mkt', 'fisher', 'wnkpc']
-    block_list = [household_inc, pricing, arbitrage, production,
-                  dividend, taylor, fiscal, finance, wage, union, mkt_clearing,
-                  microBetaCZ, microBetaCA, microBetaCB]
-    G = jac.get_G(block_list, exogenous, unknowns, targets, T=T, ss=ss, save=True, use_saved=use_saved)
+    G = jac.get_G(block_list, exogenous, unknowns, targets, T=T, ss=ss, outputs=outputs, save=True, use_saved=use_saved)
+
 
     # Add impulse responses of exogenous shocks to themselves
     for o in exogenous:
         G[o] = {i : np.identity(T)*(o==i) for i in exogenous}
 
-    inputs  = exogenous
     outputs_all = G.keys()
 
-    return ss, G, inputs, outputs_all
+    return ss, G, exogenous, outputs_all, block_list
 
 
 ########################################################################
@@ -159,12 +135,12 @@ def SolveModel(theta, T, ss, use_saved, runcode):
 def getShockMACoeffs(runcode, T, theta=[]):
 
     # Inputs and outputs
-    inputs, outputs, theta0 = getruncodeFeatures(runcode)
+    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
 
     # Parameters
-    if theta == []:
+    if np.size(theta) == 0:
         # Use defaults
-        theta_use = paramsDefaults(runcode)
+        theta_use, shock_param = paramsDefaults(runcode)
     else:
         theta_use = theta
 
@@ -184,8 +160,7 @@ def getShockMACoeffs(runcode, T, theta=[]):
 
 
 # Get MA coefficients (IRFs) for endogenous aggregates
-def getEndogMACoeffs(G, mZs, outputs):
-    inputs      = mZs.keys()
+def getEndogMACoeffs(G, mZs, inputs, outputs):
     mXs_byo_byi = {o : {i : G[o][i] @ mZs[i] for i in inputs} for o in outputs}
     mXs_byi     = {i : np.stack([mXs_byo_byi[o][i] for o in outputs], axis=1) for i in inputs}
     mXs         = np.stack([mXs_byi[i] for i in inputs], axis=2)
@@ -209,14 +184,25 @@ def SimModel_Draw(mYs, Npd, Nsim):
     # Estimate covariances given the IRFs (MA coeffs) and assuming unit
     # shocks. The unit shock assumption means that the shock standard
     # deviation must be incorporated into the MA coeffs (IRF) provided
+    # print("Estimating all covariances")
+    # print(mYs.shape)
+    # tic = time.perf_counter()
     Sigma = est.all_covariances(mYs, np.ones(Ninputs))
+    # print(time.perf_counter()-tic)
 
     # Build the full covariance matrix
+    # print("Building full covariance matrix")
+    # tic = time.perf_counter()
     V = est.build_full_covariance_matrix(Sigma, np.zeros(Noutputs), Npd)
+    # print(time.perf_counter()-tic)
 
     # Draw and return aggregate outputs
-    for s in range(Nsim):
-        dY[:,:,s] = np.random.multivariate_normal(np.zeros(Npd*Noutputs), V).reshape((Npd, Noutputs))
+    # print("Drawing")
+    # tic = time.perf_counter()
+    # for s in range(Nsim):
+        # dY[:,:,s] = np.random.multivariate_normal(np.zeros(Npd*Noutputs), V).reshape((Npd, Noutputs))
+    dY = np.random.multivariate_normal(np.zeros(Npd*Noutputs), V, size=Nsim).T.reshape((Npd,Noutputs,Nsim), order='C')
+    # print(time.perf_counter()-tic)
 
     return dY
 
@@ -225,9 +211,8 @@ def SimModel_Draw(mYs, Npd, Nsim):
 # Given Jacobians, structural shock MA process, simulate exog and endog
 # aggregates Simulating Model Aggregates from either MA rep or from
 # direct drawing
-def SimModel(ss, G, Npd, T, Nsim, outputs, mZs, fromMA=True, seed=None):
+def SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, fromMA=True, seed=None):
 
-    inputs   = list(mZs.keys())
     Ninputs  = len(inputs)
     Noutputs = len(outputs)
 
@@ -235,7 +220,10 @@ def SimModel(ss, G, Npd, T, Nsim, outputs, mZs, fromMA=True, seed=None):
         np.random.seed(seed)
 
     # Get MA coefficients needed for simulation
-    mYs_byo_byi, mYs_byi, mYs = getEndogMACoeffs(G, mZs, outputs)
+    # print("Computing MA coeffs")
+    # tic = time.perf_counter()
+    mYs_byo_byi, mYs_byi, mYs = getEndogMACoeffs(G, mZs, inputs, outputs)
+    # print(time.perf_counter()-tic)
 
     # Initialize matrices for exogeous and endogenous inputs'
     # deviation from steady state
@@ -280,12 +268,12 @@ def my_autocov(X, nlags):
     N   = len(X)
     ind = nlags+1
     V   = np.cov(np.stack([X[(ind-i-1):(N-i)] for i in range(ind)], axis = 0))
-    return V[1,:]
+    return V[0,:]
 
 
 # Compute muhat for a give runcode given provided dataset
 def compute_muhat(runcode, dt):
-    inputs, outputs, theta0 = getruncodeFeatures(runcode)
+    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
 
     if (runcode == 0):
         Npd, Nvar, Nsim = dt.shape
@@ -320,24 +308,29 @@ def compute_muhat(runcode, dt):
 
         # For each sim, extract moments
         Npd, Nvar, Nsim = dt.shape
-        muhats = np.zeros((9, Nsim))
+        muhats = np.zeros((12, Nsim))
         for s in range(Nsim):
             # print("Calculating moments for %d / %d..." % (s, Nsim))
 
-            # 1st order autocorrelation of each endog aggregate
-            var_autocorrs = np.apply_along_axis(lambda X: my_autocov(X,1), 0, dt[:,:,s])
-            muhats[:3,s]  = var_autocorrs[1, np.array([ind_Y, ind_pi, ind_r])]
+            # Variance and autocorrelation at various lags
+            # Row 0 is variance
+            # Row 1 is 1st lag autocorr, etc.
+            var_autocovs  = np.apply_along_axis(lambda X: my_autocov(X,1), 0, dt[:,:,s])
+            muhats[:3,s]  = var_autocovs[0, np.array([ind_Y, ind_pi, ind_r])]
+            muhats[3:6,s] = var_autocovs[1, np.array([ind_Y, ind_pi, ind_r])]
 
             # Contemporaneous covariance between endog aggregates
-            V           = np.cov(dt[:,:,s].transpose())
-            muhats[3,s] = V[ind_Y, ind_pi]
-            muhats[4,s] = V[ind_Y, ind_r]
-            muhats[5,s] = V[ind_pi, ind_r]
+            ind = 6
+            V               = np.cov(dt[:,:,s].transpose())
+            muhats[ind,s]   = V[ind_Y, ind_pi]
+            muhats[ind+1,s] = V[ind_Y, ind_r]
+            muhats[ind+2,s] = V[ind_pi, ind_r]
 
             # Compute the variance of the regression coefficients
-            muhats[6,s] = V[ind_bCZ, ind_bCZ]
-            muhats[7,s] = V[ind_bCA, ind_bCA]
-            muhats[8,s] = V[ind_bCB, ind_bCB]
+            ind = 9
+            muhats[ind,s]   = V[ind_bCZ, ind_bCZ]
+            muhats[ind+1,s] = V[ind_bCA, ind_bCA]
+            muhats[ind+2,s] = V[ind_bCB, ind_bCB]
 
     return muhats
 
@@ -353,12 +346,12 @@ def compute_muhat(runcode, dt):
 
 
 # Model h() function that spits out model-implied analytical moments given parameters
-def h_analytical(G, outputs, mZs, runcode):
+def h_analytical(G, inputs, outputs, mZs, runcode):
     Noutputs = len(outputs)
+    Ninputs  = len(inputs)
 
     # Compute MA coeffs for response of outputs to each structural shock
-    mXs_byo_byi, mXs_byi, mXs = getEndogMACoeffs(G, mZs, outputs)
-    Ninputs = mXs.shape[2]
+    mXs_byo_byi, mXs_byi, mXs = getEndogMACoeffs(G, mZs, inputs, outputs)
 
     # Compute covariances analytically, no measurement error
     # Shape is T x Noutputs x Noutputs
@@ -385,7 +378,7 @@ def h_analytical(G, outputs, mZs, runcode):
 
 
     elif runcode == 1:
-        muhats = np.zeros(9)
+        muhats = np.zeros(12)
 
         # Indices of endgenous aggregates
         ind_Y   = outputs.index('Y')
@@ -395,20 +388,28 @@ def h_analytical(G, outputs, mZs, runcode):
         ind_bCA = outputs.index('BetaCA')
         ind_bCB = outputs.index('BetaCB')
 
+        # Variance of each endog aggregate
+        muhats[0] = Sigma[0,ind_Y,  ind_Y]
+        muhats[1] = Sigma[0,ind_pi, ind_pi]
+        muhats[2] = Sigma[0,ind_r,  ind_r]
+
         # 1st order autocorrelation of each endog aggregate
-        muhats[0] = Sigma[1,ind_Y,  ind_Y]
-        muhats[1] = Sigma[1,ind_pi, ind_pi]
-        muhats[2] = Sigma[1,ind_r,  ind_r]
+        ind = 3
+        muhats[ind]   = Sigma[1,ind_Y,  ind_Y]
+        muhats[ind+1] = Sigma[1,ind_pi, ind_pi]
+        muhats[ind+2] = Sigma[1,ind_r,  ind_r]
 
         # Contemporaneous covariance between endog aggregates
-        muhats[3] = Sigma[0, ind_Y,  ind_pi]
-        muhats[4] = Sigma[0, ind_Y,  ind_r]
-        muhats[5] = Sigma[0, ind_pi, ind_r]
+        ind = 6
+        muhats[ind]   = Sigma[0, ind_Y,  ind_pi]
+        muhats[ind+1] = Sigma[0, ind_Y,  ind_r]
+        muhats[ind+2] = Sigma[0, ind_pi, ind_r]
 
         # Compute the variance of the regression coefficients
-        muhats[6] = Sigma[0, ind_bCZ, ind_bCZ]
-        muhats[7] = Sigma[0, ind_bCA, ind_bCA]
-        muhats[8] = Sigma[0, ind_bCB, ind_bCB]
+        ind = 9
+        muhats[ind]   = Sigma[0, ind_bCZ, ind_bCZ]
+        muhats[ind+1] = Sigma[0, ind_bCA, ind_bCA]
+        muhats[ind+2] = Sigma[0, ind_bCB, ind_bCB]
 
 
     return muhats
@@ -423,45 +424,103 @@ def h_analytical(G, outputs, mZs, runcode):
 # Model h() function that spits out moments given parameters, can be analytically computed or empirical
 #
 # Want initial ss and G because can reuse some stuff there
-def h(theta, ss, Npd, T, outputs, runcode, empirical=False, simFromMA=False, Nsim=1000, verbose=False):
-
+def h(runcode, theta, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, empirical=False, simFromMA=False, Nsim=1000, verbose=False):
 
     # Resolve model for given parameters
     # Using saved because assuming model already initialized
-    # print(G['i']['Z'][:,0:2].transpose())
-    tic = time.clock()
+    tic = time.perf_counter()
     use_saved=True
-    ss, G, inputs, outputs_all = SolveModel(theta, T, ss, use_saved, runcode)
+    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta, T, ss, inputs, outputs, unknowns, targets, block_list, use_saved)
     if verbose:
-        print("Solving: %f" % (time.clock()-tic))
+        print("Solving: %f" % (time.perf_counter()-tic))
 
     # Recompute IRFs given parameter values
-    tic = time.clock()
+    tic = time.perf_counter()
     mZs = getShockMACoeffs(runcode, T, theta)
+    if np.max([mZs[i].max() for i in inputs]) > 100:
+        # print('Failing')
+        # print(theta)
+        # print(mZs)
+        raise Exception('Large mZ component')
     if verbose:
-        print("IRFs: %f" % (time.clock()-tic))
+        print("IRFs: %f" % (time.perf_counter()-tic))
 
     # Compute moments: Empirical, else analytical
     Ninputs  = len(inputs)
     Noutputs = len(outputs)
     if empirical:
-        tic = time.clock()
+        tic = time.perf_counter()
         # Simulate data
-        dX = SimModel(ss, G, Npd, T, Nsim, outputs, mZs, simFromMA, 314)
+        dX = SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, simFromMA, 314)
 
         # Compute muhat and average over draws
         toret = np.mean(compute_muhat(runcode, dX), axis=1)
         if verbose:
-            print("Moments: %f" % (time.clock()-tic))
-        return toret
+            print("Moments: %f" % (time.perf_counter()-tic))
 
     # Analytical
     else:
-        tic = time.clock()
-        toret = h_analytical(G, outputs, mZs, runcode)
+        tic = time.perf_counter()
+        toret = h_analytical(G, inputs, outputs, mZs, runcode)
         if verbose:
-            print("Moments: %f" % (time.clock()-tic))
-        return toret
+            print("Moments: %f" % (time.perf_counter()-tic))
+
+    return toret
+
+
+
+########################################################################
+## Moment Matching #####################################################
+########################################################################
+
+
+def MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, hempirical, hfromMA, Nsim, muhat, Vhat, Nobs, lamb, l, u, fullyFeasible):
+    cv       = 1.96
+    h_       = lambda theta: h(runcode, theta, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, hempirical, hfromMA, 200, False)
+    h_theta0 = h_(theta0)
+    h__      = lambda theta: h_(theta).reshape((len(h_theta0),1))
+    Gfcn_    = lambda theta: wcopt.ComputeG(h__,theta)
+    res      = wcopt.TestSingle(muhat, Vhat, Nobs, lamb, theta0, theta0, cv, l, u, fullyFeasible, Gfcn_, h__, True)
+    return res
+
+
+
+def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, seed=314):
+    # Load simulated moments for matching
+    strSave  = getStrSave(runcode, T, Npd, Nsim, fromMA)
+    savepath = "./Results/muhats_" + strSave + ".npy"
+    muhats   = np.load(savepath)
+
+    # Some info to start
+    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
+    K = len(theta0)
+    I = np.eye(K)
+
+    # Solve for steady state
+    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta0, T, [], inputs, outputs, unknowns, targets, block_list, False)
+
+    #pool = mp.Pool(2)
+
+    # Compute Vhat to use for each, so we won't do fully feasible
+    Nobs = 1
+    Vhat = Nobs*np.cov(muhats)
+    l = np.array([1.001, 0.01, 0.01]).reshape((3,1))
+    u = np.array([5, 5, 0.9999]).reshape((3,1))
+    for k in range(K):
+        print("\tParam %d / %d" % (k+1, K))
+
+        for s in range(Nsim):
+            print("Matching Simulation %d / %d" % (s+1, Nsim))
+
+            res = MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
+                              block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False)
+
+
+#         pool = mp.Pool(1)
+#         results = pool.starmap(Main.MomentMatch, [(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
+#                                                    block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
+
+
 
 
 
@@ -472,15 +531,18 @@ def h(theta, ss, Npd, T, outputs, runcode, empirical=False, simFromMA=False, Nsi
 
 def paramsDefaults(runcode):
     if runcode == 0:
-        phi0   = 1.5
-        theta0 = [phi0]
+        phi0        = 1.5
+        theta0      = [phi0]
+        shock_param = [False]
     elif runcode == 1:
-        phi0     = 1.5
-        kappap0  = 0.1
-        rho_Z0   = 0.5
-        theta0   = [phi0, kappap0, rho_Z0]
+        phi0        = 1.5
+        kappap0     = 0.1
+        rho_Z0      = 0.85
+        theta0      = [phi0, kappap0, rho_Z0]
+        shock_param = [False, False, False]
 
-    return theta0
+    return np.array(theta0), np.array(shock_param)
+
 
 # For each parameter, establish a range and a default
 def paramsCheckID(runcode):
@@ -490,23 +552,34 @@ def paramsCheckID(runcode):
     elif runcode == 1:
         phis     = np.linspace(start=1.01, stop=1.9, num=5)
         kappaps  = np.linspace(start=.01, stop=0.2, num=5)
-        rho_Zs   = np.linspace(start=0.2, stop=0.7, num=5)
+        rho_Zs   = np.linspace(start=0.05, stop=0.95, num=20)
 
         # Put everything together
         thetas = [phis, kappaps, rho_Zs]
 
-    theta0 = paramsDefaults(runcode)
+    theta0, shock_param = paramsDefaults(runcode)
 
-    return thetas, theta0
+    return np.array(thetas), theta0
+
 
 
 def getruncodeFeatures(runcode):
-    inputs  = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
-    # outputs = ['Y', 'C', 'K']
-    # outputs = ['Y', 'r', 'pi', 'VarA', 'VarB', 'VarC', 'CovAC', 'CovBC', 'CovCZ']
+    exogenous = ['Z', 'rstar', 'G']
+    # exogenous = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
+
+    unknowns  = ['Y', 'r', 'w']
+    targets = ['asset_mkt', 'fisher', 'wnkpc']
+
     outputs = ['Y', 'r', 'pi', 'BetaCZ', 'BetaCA', 'BetaCB']
-    theta0  = paramsDefaults(runcode)
-    return inputs, outputs, theta0
+    # outputs = ['Y', 'C', 'K']
+    theta0, shock_param  = paramsDefaults(runcode)
+
+    block_list = [household_inc, pricing, arbitrage, production,
+                  dividend, taylor, fiscal, finance, wage, union, mkt_clearing,
+                  microBetaCZ, microBetaCA, microBetaCB]
+
+    return exogenous, unknowns, targets, outputs, theta0, shock_param, block_list
+
 
 
 def getStrSave(runcode, T, Npd, Nsim, fromMA):
@@ -516,6 +589,79 @@ def getStrSave(runcode, T, Npd, Nsim, fromMA):
 
 def quadratic_form(h, W):
     return np.vdot(h, np.matmul(W, h))
+
+
+
+
+
+########################################################################
+## Running #############################################################
+########################################################################
+
+
+def muhatsSimSave(runcode, T, Npd, Nsim, fromMA, save=True, verbose=False, seed=314):
+
+    # Solve for steady state
+    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
+    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta0, T, [], inputs, outputs, unknowns, targets, block_list, False)
+
+    # Get MA coefficients
+    mZs = getShockMACoeffs(runcode, T)
+
+    # Simulate aggregates
+    tic = time.perf_counter()
+    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
+    dY      = SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, fromMA, seed)
+    dY_dict = SimsArrayToDict(dY, outputs)
+    if verbose:
+        print(time.perf_counter()-tic)
+
+    # Compute moments
+    muhats = compute_muhat(runcode, dY)
+
+    # Save moments
+    strSave  = getStrSave(runcode, T, Npd, Nsim, fromMA)
+    savepath = "./Results/muhats_" + strSave + ".npy"
+    np.save(savepath, muhats)
+
+    return muhats
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -56,7 +56,7 @@ def household(Va_p, Vb_p, Pi_p, a_grid, b_grid, z_grid, e_grid, k_grid, beta, ei
     b2 = b**2
     c2 = c**2
     z2 = (np.ones((nZ, nB, nA))*z_grid[:,np.newaxis, np.newaxis])**2
- 
+
     cz = c * z_grid[:,np.newaxis, np.newaxis]
     az = a * z_grid[:,np.newaxis, np.newaxis]
     bz = b * z_grid[:,np.newaxis, np.newaxis]
@@ -177,7 +177,7 @@ def step6(ap_endo, c_endo, z_grid, b_grid, a_grid, ra, rb, chi0, chi1, chi2):
     # b'(z, b, a), a'(z, b, a)
     # assert np.min(np.diff(b_endo, axis=1)) < 0, 'b(kappa) is not decreasing'
     # assert np.min(np.diff(ap_endo, axis=1)) < 0, 'ap(kappa) is not decreasing'
-    ap = utils.interpolate_y(b_endo[:, ::-1, :].swapaxes(1, 2), b_grid, 
+    ap = utils.interpolate_y(b_endo[:, ::-1, :].swapaxes(1, 2), b_grid,
                              ap_endo[:, ::-1, :].swapaxes(1, 2)).swapaxes(1, 2)
     return ap
 
@@ -189,11 +189,13 @@ def income(e_grid, tax, w, N):
 
 household_inc = household.attach_hetinput(income)
 
+
+
 '''Part 2: Simple blocks'''
 
 
-# @solved(unknowns=['pi'], targets=['nkpc'])
-@simple
+# @simple
+@solved(unknowns=['pi'], targets=['nkpc'])
 def pricing(pi, mc, r, Y, kappap, mup, markup):
     nkpc = kappap * (mc - 1/mup) + Y(+1) / Y * np.log(1 + pi(+1)) / (1 + r(+1)) + markup - np.log(1 + pi)
     return nkpc
@@ -296,8 +298,6 @@ def microBetaCB(C, B, B2, BC):
     BetaCB = (BC - B*C) / (B2 - B**2)
     return BetaCB
 
-
-
 @simple
 def wage(pi, w, N, muw, kappaw):
     piw = (1 + pi) * w / w(-1) - 1
@@ -310,12 +310,10 @@ def union(piw, N, tax, w, U, kappaw, muw, vphi, frisch, beta, markup_w):
     wnkpc = kappaw * (vphi * N**(1+1/frisch) - muw*(1-tax)*w*N*U) + beta * np.log(1 + piw(+1)) + markup_w - np.log(1 + piw)
     return wnkpc
 
-
 @simple
 def mkt_clearing(p, A, B, Bg):
     asset_mkt = p + Bg - B - A
     return asset_mkt
-
 
 
 
