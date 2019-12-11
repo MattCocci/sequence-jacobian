@@ -113,7 +113,7 @@ def ComputeWorstCaseOptimal_Single(V, G, lamb_, zero_thresh):
 # h       Function of theta that gives model-implied moments
 # theta0  True values & starting parameter value for optimization
 #
-def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible, GFcn, h, start_theta0):
+def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible, GFcn, h, start_theta0=True, verbose=False):
 
     # Define some zero threshold, below which, I'll call something "zero" up
     # to numerical precision. Used to identify "zero" eigenvalues, which
@@ -154,13 +154,15 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     ## values for optimization
     ######################################################
 
+    if verbose: print("Estimating G_true...")
+
     G = {}
-    print("Estimating G_true...")
     G['true'] = GFcn(theta_true)
-    print(G['true'])
     if np.linalg.matrix_rank(G['true']) < k:
         print('Warning: G of deficient rank at true parameter')
-    print("DONE")
+
+    # print(G['true'])
+    if verbose: print("DONE")
 
 
     ######################################################
@@ -174,10 +176,13 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     res['naive']['name']  = 'Naive'
     res['naive']['V']     = np.diag(np.diag(V))
     res['naive']['W']     = np.linalg.inv(res['naive']['V'])
-    print("Estimating theta_naive...", end="")
+
+    if verbose: print("Estimating theta_naive...", end="")
     res['naive']['theta'] = estimateFcn(theta0, res['naive']['W'])
-    print("Done.")
-    print(res['naive']['theta'])
+    if verbose:
+        print("Done.")
+        print(res['naive']['theta'])
+
     res['naive']['h']     = h(res['naive']['theta'])
     if res['naive']['h'].shape != (p,1):
         raise Exception('h must have shape (p,1). Check not (p,) or (1,p)')
@@ -186,12 +191,15 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     else:
         theta0_use = res['naive']['theta']
 
+
     # G to use in constructing asysmptotic variance eestimators
     if fullyFeasible:
-        print(theta_true)
-        print(res['naive']['theta'])
+        if verbose:
+            print(theta_true)
+            print(res['naive']['theta'])
         G['naive'] = GFcn(res['naive']['theta'])
-        print(np.abs(G['naive']-G['true'])/G['true'])
+        if verbose:
+            print(np.abs(G['naive']-G['true'])/G['true'])
         Guse       = G['naive']
     else:
         Guse = G['true']
@@ -212,10 +220,13 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
         res['wcopt']['x_check'], \
         res['wcopt']['z_check']         = ComputeWorstCaseOptimal_Single(V, Guse, lambda_, zero_thresh)
     res['wcopt']['stderr_check']        = res['wcopt']['stderr_check'] / np.sqrt(Nobs)
-    print("Estimating theta_wcopt...", end="")
+
+    if verbose:
+        print("Estimating theta_wcopt...", end="")
     res['wcopt']['theta']               = estimateFcn(theta0_use, res['wcopt']['W'])
-    print("Done.")
-    print(res['wcopt']['theta'])
+    if verbose:
+        print("Done.")
+        print(res['wcopt']['theta'])
 
     # Ensure psd
     #[V_, D_] = eig(res.wcopt.W);
@@ -232,10 +243,14 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
     res['wcopt_onestep']['name']        = 'Worst-Case Optimal, One-Step'
     res['wcopt_onestep']['V']           = res['wcopt']['V']
     res['wcopt_onestep']['W']           = res['wcopt']['W']
-    print("Estimating wcopt_onestep...", end="")
+
+    if verbose:
+        print("Estimating wcopt_onestep...", end="")
     res['wcopt_onestep']['theta']       = getOnestep(res['wcopt_onestep']['W'])
-    print("Done.")
-    print(res['wcopt_onestep']['theta'])
+    if verbose:
+        print("Done.")
+        print(res['wcopt_onestep']['theta'])
+
     res['wcopt_onestep']['lcomb_check'] = np.vdot(lambda_, res['naive']['theta']) - np.vdot(res['wcopt']['x_check'], (res['naive']['h']-muhat))
 
 
@@ -247,19 +262,25 @@ def TestSingle(muhat, V, Nobs, lamb, theta0, theta_true, cv, l, u, fullyFeasible
         res['opt']['name']  = 'Full-Info Optimal'
         res['opt']['V']     = V
         res['opt']['W']     = np.linalg.inv(V)
-        print("Estimating theta_opt...", end="")
+
+        if verbose:
+            print("Estimating theta_opt...", end="")
         res['opt']['theta'] = estimateFcn(theta0_use, res['opt']['W'])
-        print(res['opt']['theta'])
-        print("Done.")
+        if verbose:
+            print(res['opt']['theta'])
+            print("Done.")
 
         res['opt_onestep']          = {}
         res['opt_onestep']['name']  = 'Full-Info Optimal, One-Step'
         res['opt_onestep']['V']     = res['opt']['V']
         res['opt_onestep']['W']     = np.linalg.inv(res['opt']['V'])
-        print("Estimating opt_onestep...", end="")
+
+        if verbose:
+            print("Estimating opt_onestep...", end="")
         res['opt_onestep']['theta'] = getOnestep(res['opt_onestep']['W'])
-        print(res['opt_onestep']['theta'])
-        print("Done.")
+        if verbose:
+            print(res['opt_onestep']['theta'])
+            print("Done.")
     else:
         res['opt']         = []
         res['opt_onestep'] = []

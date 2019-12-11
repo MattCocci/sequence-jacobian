@@ -17,6 +17,8 @@ import estimation as est
 import time
 import wcopt
 import warnings
+import multiprocessing as mp
+
 
 
 warnings.simplefilter('error')
@@ -480,12 +482,12 @@ def MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
     h_theta0 = h_(theta0)
     h__      = lambda theta: h_(theta).reshape((len(h_theta0),1))
     Gfcn_    = lambda theta: wcopt.ComputeG(h__,theta)
-    res      = wcopt.TestSingle(muhat, Vhat, Nobs, lamb, theta0, theta0, cv, l, u, fullyFeasible, Gfcn_, h__, True)
+    res      = wcopt.TestSingle(muhat, Vhat, Nobs, lamb, theta0, theta0, cv, l, u, fullyFeasible, Gfcn_, h__, True, True)
     return res
 
 
 
-def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, seed=314):
+def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparallel=0, seed=314):
     # Load simulated moments for matching
     strSave  = getStrSave(runcode, T, Npd, Nsim, fromMA)
     savepath = "./Results/muhats_" + strSave + ".npy"
@@ -499,26 +501,32 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, seed=314
     # Solve for steady state
     ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta0, T, [], inputs, outputs, unknowns, targets, block_list, False)
 
-    #pool = mp.Pool(2)
+    # Setup up parallel pool
+    if nparallel != 0:
+        pool = mp.Pool(nparallel)
 
     # Compute Vhat to use for each, so we won't do fully feasible
     Nobs = 1
     Vhat = Nobs*np.cov(muhats)
     l = np.array([1.001, 0.01, 0.01]).reshape((3,1))
     u = np.array([5, 5, 0.9999]).reshape((3,1))
+    res = [[] for k in range(K)]
     for k in range(K):
         print("\tParam %d / %d" % (k+1, K))
 
-        for s in range(Nsim):
-            print("Matching Simulation %d / %d" % (s+1, Nsim))
+        if nparallel == 0:
+            for s in range(Nsim):
+                print("Matching Simulation %d / %d" % (s+1, Nsim))
 
-            res = MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
-                              block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False)
+                res[k].append(MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
+                                          block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False))
+        else:
+            pool = mp.Pool(2)
+            res[k] = pool.starmap(MomentMatch, [(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
+                                                 block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
+            pool.close()
 
-
-#         pool = mp.Pool(1)
-#         results = pool.starmap(Main.MomentMatch, [(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
-#                                                    block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
+    return res
 
 
 
