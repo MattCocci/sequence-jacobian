@@ -526,6 +526,7 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparalle
                                                  block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
             pool.close()
 
+    np.save("res_" + strSave + ".npy", res)
     return res
 
 
