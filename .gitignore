@@ -3,4 +3,5 @@ __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 Results/
-wcopt/
+wcopt_matlab/
+scratch/
