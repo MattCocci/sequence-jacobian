@@ -17,7 +17,7 @@ import estimation as est
 import time
 import wcopt
 import warnings
-import multiprocessing as mp
+import multiprocess as mp
 
 
 
@@ -508,8 +508,8 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparalle
     # Compute Vhat to use for each, so we won't do fully feasible
     Nobs = 1
     Vhat = Nobs*np.cov(muhats)
-    l = np.array([1.001, 0.01, 0.01]).reshape((3,1))
-    u = np.array([5, 5, 0.9999]).reshape((3,1))
+    l = np.array([1.05, 0.05, 0.05]).reshape((3,1))
+    u = np.array([3, 5, 0.95]).reshape((3,1))
     res = [[] for k in range(K)]
     for k in range(K):
         print("\tParam %d / %d" % (k+1, K))
@@ -521,7 +521,7 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparalle
                 res[k].append(MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
                                           block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False))
         else:
-            pool = mp.Pool(2)
+            pool = mp.Pool(nparallel)
             res[k] = pool.starmap(MomentMatch, [(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
                                                  block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
             pool.close()
