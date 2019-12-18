@@ -1,4 +1,4 @@
-# Standard python packages
+# Standard python packagesD
 import numpy as np
 from numba import njit
 
@@ -18,11 +18,20 @@ import time
 import wcopt
 import warnings
 import multiprocess as mp
+import copy
 
 
 
 warnings.simplefilter('error')
 
+
+# Runcode
+# 0:  1 parameter, 3 shocks
+# 1:  3 params, 3 shocks
+# 2:  3 params, all shocks
+# 3:  9 params, all shocks, all the moments
+# 4:  9 params, all shocks, selected moments
+# 5:  3 params, all shocks, selected moments
 
 
 # Computing the empirical variance and using as weighting matrix for
@@ -80,46 +89,70 @@ warnings.simplefilter('error')
 
 
 # Solve Model: Get steady state and Jacobian for some set of parameters, or just Jacobian if ss unchanged
-def SolveModel(runcode, theta, T, ss, exogenous, outputs, unknowns, targets, block_list, use_saved):
+# def SolveModel(runcode, theta, T, ss, exogenous, outputs, unknowns, targets, block_list, use_saved):
+def SolveModel(modelInfo, init):
 
-    # If no parameters provided, use defaults
-    if np.size(theta) == 0:
-        theta_use, shock_param = paramsDefaults(runcode)
+    # RUNCODE
+    runcode = modelInfo['runcode']
+
+    ## SET PARAMETER VALUES
+    # If modelInfo dictionary not already initialized, initalize it
+    # Also set parameters theta
+    if init:
+        modelInfo.update(getruncodeFeatures(runcode))
+        theta_use = modelInfo['theta0']
     else:
-        theta_use = theta
+        theta_use = modelInfo['theta']
 
-    # SOLVE FOR STEADY STATE if none provided, make sure parameters
-    # are set to the the values in theta within ss so Jacobian
-    # computation uses parameters in theta, not original parameter
-    # values still in ss
+    ## STEADY STATE
+    # - Solve for it, if non provided
+    # - If ss provided, set parameters to whatever is in theta_use,
+    #   so we use those when computing Jacobian, not the original
+    #   parameter values that were stored in ss when we first solved
     if runcode == 0:
         phi = theta_use[0]
-        if ss == []:
-            print('Recomputing steady state')
-            ss = hank_ss(phi=phi, noisy=False)
+        if 'ss' not in modelInfo:
+            print('Computing steady state')
+            modelInfo['ss'] = hank_ss(phi=phi, noisy=False)
         else:
-            ss['phi'] = phi
-    if runcode == 1:
+            modelInfo['ss']['phi'] = phi
+
+    elif (runcode == 1) or (runcode == 2) or (runcode == 5):
         phi, kappap = theta_use[0:2]
-        if ss == []:
-            print('Recomputing steady state')
-            ss = hank_ss(kappap=kappap, phi=phi, noisy=False)
+        if 'ss' not in modelInfo:
+            print('Computing steady state')
+            modelInfo['ss'] = hank_ss(kappap=kappap, phi=phi, noisy=False)
         else:
-            ss['phi']    = phi
-            ss['kappap'] = kappap
+            modelInfo['ss']['phi']    = phi
+            modelInfo['ss']['kappap'] = kappap
 
+    elif (runcode == 3) or (runcode == 4):
+        phi, kappap = theta_use[0:2]
+        kappaw      = theta_use[3]
+        if 'ss' not in modelInfo:
+            print('Computing steady state')
+            modelInfo['ss'] = hank_ss(kappap=kappap, phi=phi, kappaw=kappaw, noisy=False)
+        else:
+            modelInfo['ss']['phi']    = phi
+            modelInfo['ss']['kappap'] = kappap
+            modelInfo['ss']['kappaw'] = kappaw
 
-    # (Re)Compute Jacobians
-    G = jac.get_G(block_list, exogenous, unknowns, targets, T=T, ss=ss, outputs=outputs, save=True, use_saved=use_saved)
+    ## JACOBIANS
 
+    # Compute or recompute
+    if init: # Get all jacobians
+        modelInfo['G'] = jac.get_G(modelInfo['block_list'], modelInfo['exogenous'], modelInfo['unknowns'], modelInfo['targets'], T=modelInfo['T'], ss=modelInfo['ss'], save=True, use_saved=False)
+    else:
+        modelInfo['G'] = jac.get_G(modelInfo['block_list'], modelInfo['exogenous'], modelInfo['unknowns'], modelInfo['targets'], T=modelInfo['T'], ss=modelInfo['ss'], outputs=modelInfo['outputs'], save=True, use_saved=True)
 
     # Add impulse responses of exogenous shocks to themselves
-    for o in exogenous:
-        G[o] = {i : np.identity(T)*(o==i) for i in exogenous}
+    for o in modelInfo['exogenous']:
+        modelInfo['G'][o] = {i : np.identity(modelInfo['T'])*(o==i) for i in modelInfo['exogenous']}
 
-    outputs_all = G.keys()
+    if init:
+        modelInfo['outputs_all'] = modelInfo['G'].keys()
 
-    return ss, G, exogenous, outputs_all, block_list
+    return modelInfo
 
 
 ########################################################################
@@ -134,28 +167,31 @@ def SolveModel(runcode, theta, T, ss, exogenous, outputs, unknowns, targets, blo
 #
 # Note that currently, the shock std dev is built into the MA coeffs,
 # rather than left as a separate parameter.
-def getShockMACoeffs(runcode, T, theta=[]):
-
-    # Inputs and outputs
-    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
+def getShockMACoeffs(modelInfo):
 
     # Parameters
-    if np.size(theta) == 0:
-        # Use defaults
-        theta_use, shock_param = paramsDefaults(runcode)
+    if 'theta' not in modelInfo:
+        theta = modelInfo['theta0']
     else:
-        theta_use = theta
+        theta = modelInfo['theta']
 
     # Set up the MA coefficients in the MA(infty) rep which characterize
     # the response (IRF) of the exogenous aggregates to the exogenous
     # shocks
-    rho   = {i : 0.9 for i in inputs}
-    sigma = {i : 0.01 for i in inputs}
+    rho   = {i : 0.9 for i in modelInfo['exogenous']}
+    sigma = {i : 0.01 for i in modelInfo['exogenous']}
 
-    if runcode == 1:
-        rho['Z'] = theta_use[2]
+    if (modelInfo['runcode'] == 1) or (modelInfo['runcode'] == 2) or (modelInfo['runcode'] == 5):
+        rho['Z'] = theta[2]
+    if (modelInfo['runcode'] == 3) or (modelInfo['runcode'] == 4):
+        rho['Z']       = theta[2]
+        rho['rstar']   = theta[4]
+        rho['beta']    = theta[5]
+        sigma['Z']     = theta[6]
+        sigma['rstar'] = theta[7]
+        sigma['beta']  = theta[8]
 
-    mZs = {i : rho[i]**(np.arange(T))*sigma[i] for i in inputs}
+    mZs = {i : rho[i]**(np.arange(modelInfo['T']))*sigma[i] for i in modelInfo['exogenous']}
 
     return mZs
 
@@ -213,8 +249,12 @@ def SimModel_Draw(mYs, Npd, Nsim):
 # Given Jacobians, structural shock MA process, simulate exog and endog
 # aggregates Simulating Model Aggregates from either MA rep or from
 # direct drawing
-def SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, fromMA=True, seed=None):
+def SimModel(modelInfo, mZs, Npd, Nsim, fromMA=True, seed=None):
 
+    G        = modelInfo['G']
+    T        = modelInfo['T']
+    inputs   = modelInfo['exogenous']
+    outputs  = modelInfo['outputs']
     Ninputs  = len(inputs)
     Noutputs = len(outputs)
 
@@ -274,8 +314,8 @@ def my_autocov(X, nlags):
 
 
 # Compute muhat for a give runcode given provided dataset
-def compute_muhat(runcode, dt):
-    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
+def compute_muhat(modelInfo, dt):
+    runcode = modelInfo['runcode']
 
     if (runcode == 0):
         Npd, Nvar, Nsim = dt.shape
@@ -298,15 +338,151 @@ def compute_muhat(runcode, dt):
                 muhats[(Nvar*2+ctr):(Nvar*2+ctr+len(Vadd)), s] = Vadd
                 ctr += len(Vadd)
 
-    elif runcode == 1:
+    elif (runcode == 2) or (runcode == 3):
+        # Variance of micro coeffs, non consumption
+        # Corr of beta coeff and Y
 
-        # Indices of endgenous aggregates
+        outputs = modelInfo['outputs']
         ind_Y   = outputs.index('Y')
         ind_pi  = outputs.index('pi')
         ind_r   = outputs.index('r')
-        ind_bCZ = outputs.index('BetaCZ')
-        ind_bCA = outputs.index('BetaCA')
-        ind_bCB = outputs.index('BetaCB')
+        ind_C   = outputs.index('C')
+        ind_I   = outputs.index('I')
+        ind_i   = outputs.index('i')
+
+        ind_Beta_C_ZM  = outputs.index('Beta_C_ZM')
+        ind_Beta_C_A   = outputs.index('Beta_C_A')
+        ind_Beta_C_B   = outputs.index('Beta_C_B')
+        ind_Beta_A_ZM  = outputs.index('Beta_A_ZM')
+        ind_Corr_A_ZM  = outputs.index('Corr_A_ZM')
+        ind_Beta_B_ZM  = outputs.index('Beta_B_ZM')
+        ind_Corr_B_ZM  = outputs.index('Corr_B_ZM')
+        ind_Beta_A_ZMY = outputs.index('Beta_A_ZMY')
+        ind_Beta_B_ZMY = outputs.index('Beta_B_ZMY')
+
+
+        # For each sim, extract moments
+        Npd, Nvar, Nsim = dt.shape
+        muhats = np.zeros((6*2 + 12 + 9 + 9, Nsim))
+        for s in range(Nsim):
+            # print("Calculating moments for %d / %d..." % (s, Nsim))
+
+            # Variance and autocorrelation at various lags
+            # Row 0 is variance
+            # Row 1 is 1st lag autocorr, etc.
+            var_autocovs   = np.apply_along_axis(lambda X: my_autocov(X,1), 0, dt[:,:,s])
+            muhats[:6,s]   = var_autocovs[0, np.array([ind_Y, ind_pi, ind_r, ind_C, ind_I, ind_i])]
+            muhats[6:12,s] = var_autocovs[1, np.array([ind_Y, ind_pi, ind_r, ind_C, ind_I, ind_i])] / muhats[:6,s]
+
+            # Contemporaneous covariance between endog aggregates
+            ind = 12
+            V                = np.cov(dt[:,:,s].transpose())
+            muhats[ind+0,s]  = V[ind_Y, ind_pi]  /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_pi, ind_pi] )
+            muhats[ind+1,s]  = V[ind_Y, ind_r]   /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_r , ind_r ] )
+            muhats[ind+2,s]  = V[ind_Y, ind_i]   /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_i , ind_i ] )
+            muhats[ind+3,s]  = V[ind_Y, ind_C]   /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_C , ind_C ] )
+            muhats[ind+4,s]  = V[ind_pi, ind_r]  /  np.sqrt( V[ind_pi, ind_pi] *  V[ind_r , ind_r ] )
+            muhats[ind+5,s]  = V[ind_pi, ind_I]  /  np.sqrt( V[ind_pi, ind_pi] *  V[ind_I , ind_I ] )
+            muhats[ind+6,s]  = V[ind_C, ind_pi]  /  np.sqrt( V[ind_C , ind_C ] *  V[ind_pi, ind_pi] )
+            muhats[ind+7,s]  = V[ind_C, ind_I]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_I , ind_I ] )
+            muhats[ind+8,s]  = V[ind_C, ind_i]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_i , ind_i ] )
+            muhats[ind+9,s]  = V[ind_C, ind_r]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_r , ind_r ] )
+            muhats[ind+10,s] = V[ind_I, ind_i]   /  np.sqrt( V[ind_I , ind_I ] *  V[ind_i , ind_i ] )
+            muhats[ind+11,s] = V[ind_I, ind_r]   /  np.sqrt( V[ind_I , ind_I ] *  V[ind_r , ind_r ] )
+
+            # Compute the variance of the regression and corr coefficients
+            ind = ind + 12
+            muhats[ind+0,s] = V[ind_Beta_C_ZM , ind_Beta_C_ZM ]
+            muhats[ind+1,s] = V[ind_Beta_C_A  , ind_Beta_C_A  ]
+            muhats[ind+2,s] = V[ind_Beta_C_B  , ind_Beta_C_B  ]
+            muhats[ind+3,s] = V[ind_Beta_A_ZM , ind_Beta_A_ZM ]
+            muhats[ind+4,s] = V[ind_Beta_B_ZM , ind_Beta_B_ZM ]
+            muhats[ind+5,s] = V[ind_Beta_A_ZMY, ind_Beta_A_ZMY]
+            muhats[ind+6,s] = V[ind_Beta_B_ZMY, ind_Beta_B_ZMY]
+            muhats[ind+7,s] = V[ind_Corr_A_ZM , ind_Corr_A_ZM ]
+            muhats[ind+8,s] = V[ind_Corr_B_ZM , ind_Corr_B_ZM ]
+
+            # Corr of reg/corr coeffs and Y
+            ind = ind + 9
+            muhats[ind+0,s] = V[ind_Beta_C_ZM , ind_Y] / np.sqrt(V[ind_Beta_C_ZM , ind_Beta_C_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+1,s] = V[ind_Beta_C_A  , ind_Y] / np.sqrt(V[ind_Beta_C_A  , ind_Beta_C_A ] * V[ind_Y, ind_Y])
+            muhats[ind+2,s] = V[ind_Beta_C_B  , ind_Y] / np.sqrt(V[ind_Beta_C_B  , ind_Beta_C_B ] * V[ind_Y, ind_Y])
+            muhats[ind+3,s] = V[ind_Beta_A_ZM , ind_Y] / np.sqrt(V[ind_Beta_A_ZM , ind_Beta_A_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+4,s] = V[ind_Beta_B_ZM , ind_Y] / np.sqrt(V[ind_Beta_B_ZM , ind_Beta_B_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+5,s] = V[ind_Beta_A_ZMY, ind_Y] / np.sqrt(V[ind_Beta_A_ZMY, ind_Beta_A_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+6,s] = V[ind_Beta_B_ZMY, ind_Y] / np.sqrt(V[ind_Beta_B_ZMY, ind_Beta_B_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+7,s] = V[ind_Corr_A_ZM , ind_Y] / np.sqrt(V[ind_Corr_A_ZM , ind_Corr_A_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+8,s] = V[ind_Corr_B_ZM , ind_Y] / np.sqrt(V[ind_Corr_B_ZM , ind_Corr_B_ZM] * V[ind_Y, ind_Y])
+
+    elif (runcode == 4) or (runcode == 5):
+        # Variance of micro coeffs, non consumption
+        # Corr of beta coeff and Y
+
+        outputs = modelInfo['outputs']
+        ind_Y   = outputs.index('Y')
+        ind_pi  = outputs.index('pi')
+        ind_r   = outputs.index('r')
+        ind_C   = outputs.index('C')
+        ind_I   = outputs.index('I')
+        ind_i   = outputs.index('i')
+
+        ind_Beta_C_ZM  = outputs.index('Beta_C_ZM')
+        ind_Beta_C_A   = outputs.index('Beta_C_A')
+        ind_Beta_C_B   = outputs.index('Beta_C_B')
+        ind_Beta_A_ZM  = outputs.index('Beta_A_ZM')
+        ind_Corr_A_ZM  = outputs.index('Corr_A_ZM')
+        ind_Beta_B_ZM  = outputs.index('Beta_B_ZM')
+        ind_Corr_B_ZM  = outputs.index('Corr_B_ZM')
+        ind_Beta_A_ZMY = outputs.index('Beta_A_ZMY')
+        ind_Beta_B_ZMY = outputs.index('Beta_B_ZMY')
+
+
+        # For each sim, extract moments
+        Npd, Nvar, Nsim = dt.shape
+        muhats = np.zeros((19, Nsim))
+        for s in range(Nsim):
+            # print("Calculating moments for %d / %d..." % (s, Nsim))
+
+            # Variance and autocorrelation at various lags
+            # Row 0 is variance
+            # Row 1 is 1st lag autocorr, etc.
+            var_autocovs   = np.apply_along_axis(lambda X: my_autocov(X,1), 0, dt[:,:,s])
+            muhats[:2,s]   = var_autocovs[0, np.array([ind_Y, ind_pi])]
+            muhats[2:6,s]  = var_autocovs[1, np.array([ind_Y, ind_pi, ind_r, ind_i])] / var_autocovs[0, np.array([ind_Y, ind_pi, ind_r, ind_i])]
+
+            # Contemporaneous covariance between endog aggregates
+            ind = 6
+            V                = np.cov(dt[:,:,s].transpose())
+            muhats[ind+0,s]  = V[ind_Y, ind_pi]  /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_pi, ind_pi] )
+            muhats[ind+1,s]  = V[ind_Y, ind_r]   /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_r , ind_r ] )
+            muhats[ind+2,s]  = V[ind_Y, ind_C]   /  np.sqrt( V[ind_Y , ind_Y ] *  V[ind_C , ind_C ] )
+            muhats[ind+3,s]  = V[ind_pi, ind_r]  /  np.sqrt( V[ind_pi, ind_pi] *  V[ind_r , ind_r ] )
+            muhats[ind+4,s]  = V[ind_pi, ind_I]  /  np.sqrt( V[ind_pi, ind_pi] *  V[ind_I , ind_I ] )
+            muhats[ind+5,s]  = V[ind_C, ind_I]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_I , ind_I ] )
+            muhats[ind+6,s]  = V[ind_C, ind_i]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_i , ind_i ] )
+            muhats[ind+7,s]  = V[ind_C, ind_r]   /  np.sqrt( V[ind_C , ind_C ] *  V[ind_r , ind_r ] )
+
+            # Compute the variance of the regression and corr coefficients
+            ind = ind + 8
+            muhats[ind+0,s] = V[ind_Beta_B_ZM , ind_Beta_B_ZM ]
+
+            # Corr of reg/corr coeffs and Y
+            ind = ind + 1
+            muhats[ind+0,s] = V[ind_Beta_A_ZM , ind_Y] / np.sqrt(V[ind_Beta_A_ZM , ind_Beta_A_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+1,s] = V[ind_Beta_B_ZM , ind_Y] / np.sqrt(V[ind_Beta_B_ZM , ind_Beta_B_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+2,s] = V[ind_Beta_A_ZMY, ind_Y] / np.sqrt(V[ind_Beta_A_ZMY, ind_Beta_A_ZM] * V[ind_Y, ind_Y])
+            muhats[ind+3,s] = V[ind_Beta_B_ZMY, ind_Y] / np.sqrt(V[ind_Beta_B_ZMY, ind_Beta_B_ZM] * V[ind_Y, ind_Y])
+
+    elif runcode == 1:
+
+        # Indices of endgenous aggregates
+        outputs = modelInfo['outputs']
+        ind_Y   = outputs.index('Y')
+        ind_pi  = outputs.index('pi')
+        ind_r   = outputs.index('r')
+        ind_bCZ = outputs.index('Beta_C_ZM')
+        ind_bCA = outputs.index('Beta_C_A')
+        ind_bCB = outputs.index('Beta_C_B')
 
         # For each sim, extract moments
         Npd, Nvar, Nsim = dt.shape
@@ -341,14 +517,17 @@ def compute_muhat(runcode, dt):
 # Take the mean of this quantity over time to get the moments
 
 
-
 ########################################################################
 ## Computing Analytical Moments ########################################
 ########################################################################
 
 
 # Model h() function that spits out model-implied analytical moments given parameters
-def h_analytical(G, inputs, outputs, mZs, runcode):
+def h_analytical(modelInfo, mZs):
+    runcode  = modelInfo['runcode']
+    inputs   = modelInfo['exogenous']
+    outputs  = modelInfo['outputs']
+    G        = modelInfo['G']
     Noutputs = len(outputs)
     Ninputs  = len(inputs)
 
@@ -361,10 +540,9 @@ def h_analytical(G, inputs, outputs, mZs, runcode):
     # all combinations of variables
     Sigma  = est.all_covariances(mXs, np.ones(Ninputs))
 
-    # Return model-implied moments. What exactly is returned deps on
-    # runcode
+    # Return model-implied moments. Which ones depends upon runcode
     ## FIX THIS
-    if runcode == 0:
+    if (runcode == 0):
         Ncov   = int(Noutputs*(Noutputs+1)/2 - Noutputs)
         muhats = np.zeros(Noutputs*2 + Ncov)
 
@@ -374,9 +552,142 @@ def h_analytical(G, inputs, outputs, mZs, runcode):
         # Contemporaneous covariance between endog aggregates
         ctr = 0
         for m in range(Noutputs-1):
+            # print("SHAPE")
+            # print(Sigma.shape)
             Vadd = Sigma[0,m,(m+1):]
             muhats[(Noutputs*2+ctr):(Noutputs*2+ctr+len(Vadd))] = Vadd
             ctr += len(Vadd)
+
+    elif (runcode == 2) or (runcode == 3):
+        muhats = np.zeros(12 + 12 + 9 + 9)
+
+        # Indices of exogenous aggregates
+        ind_Y   = outputs.index('Y')
+        ind_pi  = outputs.index('pi')
+        ind_r   = outputs.index('r')
+        ind_C   = outputs.index('C')
+        ind_I   = outputs.index('I')
+        ind_i   = outputs.index('i')
+
+        ind_Beta_C_ZM  = outputs.index('Beta_C_ZM')
+        ind_Beta_C_A   = outputs.index('Beta_C_A')
+        ind_Beta_C_B   = outputs.index('Beta_C_B')
+        ind_Beta_A_ZM  = outputs.index('Beta_A_ZM')
+        ind_Corr_A_ZM  = outputs.index('Corr_A_ZM')
+        ind_Beta_B_ZM  = outputs.index('Beta_B_ZM')
+        ind_Corr_B_ZM  = outputs.index('Corr_B_ZM')
+        ind_Beta_A_ZMY = outputs.index('Beta_A_ZMY')
+        ind_Beta_B_ZMY = outputs.index('Beta_B_ZMY')
+
+        # Variance of endogenous aggregates
+        muhats[0] = Sigma[0, ind_Y, ind_Y]
+        muhats[1] = Sigma[0, ind_pi, ind_pi]
+        muhats[2] = Sigma[0, ind_r, ind_r]
+        muhats[3] = Sigma[0, ind_C, ind_C]
+        muhats[4] = Sigma[0, ind_I, ind_I]
+        muhats[5] = Sigma[0, ind_i, ind_i]
+
+        # 1st order autocorrelation of each endog aggregate
+        ind = 6
+        muhats[ind+0] = Sigma[1, ind_Y, ind_Y]   / Sigma[0, ind_Y, ind_Y]
+        muhats[ind+1] = Sigma[1, ind_pi, ind_pi] / Sigma[0, ind_pi, ind_pi]
+        muhats[ind+2] = Sigma[1, ind_r, ind_r]   / Sigma[0, ind_r, ind_r]
+        muhats[ind+3] = Sigma[1, ind_C, ind_C]   / Sigma[0, ind_C, ind_C]
+        muhats[ind+4] = Sigma[1, ind_I, ind_I]   / Sigma[0, ind_I, ind_I]
+        muhats[ind+5] = Sigma[1, ind_i, ind_i]   / Sigma[0, ind_i, ind_i]
+
+        # Contemporaneous covariance between endog aggs
+        ind = ind+6
+        muhats[ind+0]  = Sigma[0, ind_Y, ind_pi]   /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_pi, ind_pi])
+        muhats[ind+1]  = Sigma[0, ind_Y, ind_r]    /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_r , ind_r ])
+        muhats[ind+2]  = Sigma[0, ind_Y, ind_i]    /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_i , ind_i ])
+        muhats[ind+3]  = Sigma[0, ind_Y, ind_C]    /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_C , ind_C ])
+        muhats[ind+4]  = Sigma[0, ind_pi, ind_r]   /  np.sqrt(Sigma[0, ind_pi, ind_pi] * Sigma[0, ind_r , ind_r ])
+        muhats[ind+5]  = Sigma[0, ind_pi, ind_I]   /  np.sqrt(Sigma[0, ind_pi, ind_pi] * Sigma[0, ind_I , ind_I ])
+        muhats[ind+6]  = Sigma[0, ind_C, ind_pi]   /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_pi, ind_pi])
+        muhats[ind+7]  = Sigma[0, ind_C, ind_I]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_I , ind_I ])
+        muhats[ind+8]  = Sigma[0, ind_C, ind_i]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_i , ind_i ])
+        muhats[ind+9]  = Sigma[0, ind_C, ind_r]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_r , ind_r ])
+        muhats[ind+10] = Sigma[0, ind_I, ind_i]    /  np.sqrt(Sigma[0, ind_I , ind_I ] * Sigma[0, ind_i , ind_i ])
+        muhats[ind+11] = Sigma[0, ind_I, ind_r]    /  np.sqrt(Sigma[0, ind_I , ind_I ] * Sigma[0, ind_r , ind_r ])
+
+        # Variance of regression and corr coeffs
+        ind= ind + 12
+        muhats[ind+0] = Sigma[0, ind_Beta_C_ZM , ind_Beta_C_ZM ]
+        muhats[ind+1] = Sigma[0, ind_Beta_C_A  , ind_Beta_C_A  ]
+        muhats[ind+2] = Sigma[0, ind_Beta_C_B  , ind_Beta_C_B  ]
+        muhats[ind+3] = Sigma[0, ind_Beta_A_ZM , ind_Beta_A_ZM ]
+        muhats[ind+4] = Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ]
+        muhats[ind+5] = Sigma[0, ind_Beta_A_ZMY, ind_Beta_A_ZMY]
+        muhats[ind+6] = Sigma[0, ind_Beta_B_ZMY, ind_Beta_B_ZMY]
+        muhats[ind+7] = Sigma[0, ind_Corr_A_ZM , ind_Corr_A_ZM ]
+        muhats[ind+8] = Sigma[0, ind_Corr_B_ZM , ind_Corr_B_ZM ]
+
+        # Corr of reg/corr coeffs and Y
+        ind= ind + 9
+        muhats[ind+0] = Sigma[0, ind_Beta_C_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_C_ZM , ind_Beta_C_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+1] = Sigma[0, ind_Beta_C_A  , ind_Y] / np.sqrt(Sigma[0, ind_Beta_C_A  , ind_Beta_C_A  ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+2] = Sigma[0, ind_Beta_C_B  , ind_Y] / np.sqrt(Sigma[0, ind_Beta_C_B  , ind_Beta_C_B  ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+3] = Sigma[0, ind_Beta_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZM , ind_Beta_A_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+4] = Sigma[0, ind_Beta_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+5] = Sigma[0, ind_Beta_A_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZMY, ind_Beta_A_ZMY] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+6] = Sigma[0, ind_Beta_B_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZMY, ind_Beta_B_ZMY] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+7] = Sigma[0, ind_Corr_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Corr_A_ZM , ind_Corr_A_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+8] = Sigma[0, ind_Corr_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Corr_B_ZM , ind_Corr_B_ZM ] * Sigma[0,ind_Y,ind_Y])
+
+    elif (runcode == 2) or (runcode == 3):
+        muhats = np.zeros(19)
+
+        # Indices of exogenous aggregates
+        ind_Y   = outputs.index('Y')
+        ind_pi  = outputs.index('pi')
+        ind_r   = outputs.index('r')
+        ind_C   = outputs.index('C')
+        ind_I   = outputs.index('I')
+        ind_i   = outputs.index('i')
+
+        ind_Beta_C_ZM  = outputs.index('Beta_C_ZM')
+        ind_Beta_C_A   = outputs.index('Beta_C_A')
+        ind_Beta_C_B   = outputs.index('Beta_C_B')
+        ind_Beta_A_ZM  = outputs.index('Beta_A_ZM')
+        ind_Corr_A_ZM  = outputs.index('Corr_A_ZM')
+        ind_Beta_B_ZM  = outputs.index('Beta_B_ZM')
+        ind_Corr_B_ZM  = outputs.index('Corr_B_ZM')
+        ind_Beta_A_ZMY = outputs.index('Beta_A_ZMY')
+        ind_Beta_B_ZMY = outputs.index('Beta_B_ZMY')
+
+        # Variance of endogenous aggregates
+        muhats[0] = Sigma[0, ind_Y, ind_Y]
+        muhats[1] = Sigma[0, ind_pi, ind_pi]
+
+        # 1st order autocorrelation of each endog aggregate
+        ind = 2
+        muhats[ind+0] = Sigma[1, ind_Y, ind_Y]   / Sigma[0, ind_Y, ind_Y]
+        muhats[ind+1] = Sigma[1, ind_pi, ind_pi] / Sigma[0, ind_pi, ind_pi]
+        muhats[ind+2] = Sigma[1, ind_r, ind_r]   / Sigma[0, ind_r, ind_r]
+        muhats[ind+3] = Sigma[1, ind_i, ind_i]   / Sigma[0, ind_i, ind_i]
+
+        # Contemporaneous covariance between endog aggs
+        ind = ind+4
+        muhats[ind+0]  = Sigma[0, ind_Y, ind_pi]   /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_pi, ind_pi])
+        muhats[ind+1]  = Sigma[0, ind_Y, ind_r]    /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_r , ind_r ])
+        muhats[ind+2]  = Sigma[0, ind_Y, ind_C]    /  np.sqrt(Sigma[0, ind_Y , ind_Y ] * Sigma[0, ind_C , ind_C ])
+        muhats[ind+3]  = Sigma[0, ind_pi, ind_r]   /  np.sqrt(Sigma[0, ind_pi, ind_pi] * Sigma[0, ind_r , ind_r ])
+        muhats[ind+4]  = Sigma[0, ind_pi, ind_I]   /  np.sqrt(Sigma[0, ind_pi, ind_pi] * Sigma[0, ind_I , ind_I ])
+        muhats[ind+5]  = Sigma[0, ind_C, ind_I]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_I , ind_I ])
+        muhats[ind+6]  = Sigma[0, ind_C, ind_i]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_i , ind_i ])
+        muhats[ind+7]  = Sigma[0, ind_C, ind_r]    /  np.sqrt(Sigma[0, ind_C , ind_C ] * Sigma[0, ind_r , ind_r ])
+
+        # Variance of regression and corr coeffs
+        ind= ind + 8
+        muhats[ind+0] = Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ]
+
+        # Corr of reg/corr coeffs and Y
+        ind= ind + 1
+        muhats[ind+3] = Sigma[0, ind_Beta_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZM , ind_Beta_A_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+4] = Sigma[0, ind_Beta_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+5] = Sigma[0, ind_Beta_A_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZMY, ind_Beta_A_ZMY] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+6] = Sigma[0, ind_Beta_B_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZMY, ind_Beta_B_ZMY] * Sigma[0,ind_Y,ind_Y])
 
 
     elif runcode == 1:
@@ -386,9 +697,9 @@ def h_analytical(G, inputs, outputs, mZs, runcode):
         ind_Y   = outputs.index('Y')
         ind_pi  = outputs.index('pi')
         ind_r   = outputs.index('r')
-        ind_bCZ = outputs.index('BetaCZ')
-        ind_bCA = outputs.index('BetaCA')
-        ind_bCB = outputs.index('BetaCB')
+        ind_bCZ = outputs.index('Beta_C_ZM')
+        ind_bCA = outputs.index('Beta_C_A')
+        ind_bCB = outputs.index('Beta_C_B')
 
         # Variance of each endog aggregate
         muhats[0] = Sigma[0,ind_Y,  ind_Y]
@@ -417,6 +728,89 @@ def h_analytical(G, inputs, outputs, mZs, runcode):
     return muhats
 
 
+def GetIdentificationLabels(runcode, outputs):
+
+    if (runcode == 2) or (runcode == 3):
+        labs = [
+                'Var(Y)',
+                'Var(pi)',
+                'Var(r)',
+                'Var(C)',
+                'Var(I)',
+                'Var(i)',
+                'AutoCorr(Y)',
+                'AutoCorr(pi)',
+                'AutoCorr(r)',
+                'AutoCorr(C)',
+                'AutoCorr(I)',
+                'AutoCorr(i)',
+                'Corr(Y,pi)',
+                'Corr(Y,r)',
+                'Corr(Y,i)',
+                'Corr(Y,C)',
+                'Corr(pi,r)',
+                'Corr(pi,I)',
+                'Corr(C,pi)',
+                'Corr(C,I)',
+                'Corr(C,i)',
+                'Corr(C,r)',
+                'Corr(I,i)',
+                'Corr(I,r)',
+                'Var(Beta_C_ZM,Beta_C_ZM)',
+                'Var(Beta_C_A,Beta_C_A)',
+                'Var(Beta_C_B,Beta_C_B  )',
+                'Var(Beta_A_ZM,Beta_A_ZM)',
+                'Var(Beta_B_ZM,Beta_B_ZM)',
+                'Var(Beta_A_ZMY,Beta_A_ZMY)',
+                'Var(Beta_B_ZMY,Beta_B_ZMY)',
+                'Var(Corr_A_ZM,Corr_A_ZM )',
+                'Var(Corr_B_ZM,Corr_B_ZM )',
+                'Corr(Beta_C_ZM,Y)',
+                'Corr(Beta_C_A,Y)',
+                'Corr(Beta_C_B,Y)',
+                'Corr(Beta_A_ZM,Y)',
+                'Corr(Beta_B_ZM,Y)',
+                'Corr(Beta_A_ZMY,Y)',
+                'Corr(Beta_B_ZMY,Y)',
+                'Corr(Corr_A_ZM,Y)',
+                'Corr(Corr_B_ZM,Y)'
+                ]
+    elif (runcode == 4) or (runcode == 5):
+        labs = [
+                'Var(Y)',
+                'Var(pi)',
+                'AutoCorr(Y)',
+                'AutoCorr(pi)',
+                'AutoCorr(r)',
+                'AutoCorr(i)',
+                'Corr(Y,pi)',
+                'Corr(Y,r)',
+                'Corr(Y,C)',
+                'Corr(pi,r)',
+                'Corr(pi,I)',
+                'Corr(C,I)',
+                'Corr(C,i)',
+                'Corr(C,r)',
+                'Var(Corr_B_ZM)',
+                'Corr(Beta_A_ZM,Y)',
+                'Corr(Beta_B_ZM,Y)',
+                'Corr(Beta_A_ZMY,Y)',
+                'Corr(Beta_B_ZMY,Y)',
+                ]
+    else:
+        labs = []
+        for m in outputs:
+            labs.append("Var(" + m + ")")
+            labs.append("AutoCov(" + m + ")")
+
+        Noutputs = len(outputs)
+        for m in range(Noutputs):
+            for n in range(Noutputs):
+                if n > m:
+                    labs.append("Cov(" + outputs[m] + "," + outputs[n] + ")")
+
+    return labs
+
 
 ########################################################################
 ## h() Function for Moment-Matching ####################################
@@ -426,44 +820,46 @@ def h_analytical(G, inputs, outputs, mZs, runcode):
 # Model h() function that spits out moments given parameters, can be analytically computed or empirical
 #
 # Want initial ss and G because can reuse some stuff there
-def h(runcode, theta, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, empirical=False, simFromMA=False, Nsim=1000, verbose=False):
+def h(modelInfo, theta, Npd, empirical=False, simFromMA=False, Nsim=1000, verbose=False):
 
     # Resolve model for given parameters
     # Using saved because assuming model already initialized
-    tic = time.perf_counter()
-    use_saved=True
-    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta, T, ss, inputs, outputs, unknowns, targets, block_list, use_saved)
+    tic                = time.perf_counter()
+    modelInfo['theta'] = theta
+    modelInfo          = SolveModel(modelInfo, False) # Shouldn't be initializing at this step
     if verbose:
         print("Solving: %f" % (time.perf_counter()-tic))
 
-    # Recompute IRFs given parameter values
+    # RECOMPUTE IRFs given parameter values
     tic = time.perf_counter()
-    mZs = getShockMACoeffs(runcode, T, theta)
-    if np.max([mZs[i].max() for i in inputs]) > 100:
-        # print('Failing')
-        # print(theta)
-        # print(mZs)
+    mZs = getShockMACoeffs(modelInfo)
+    if np.max([mZs[i].max() for i in modelInfo['exogenous']]) > 100:
+        print('Failing')
+        print(theta)
+        print(mZs)
         raise Exception('Large mZ component')
     if verbose:
         print("IRFs: %f" % (time.perf_counter()-tic))
 
-    # Compute moments: Empirical, else analytical
+    # COMPUTE MOMENTS: Empirical, else analytical
+    inputs   = modelInfo['exogenous']
+    outputs  = modelInfo['outputs']
     Ninputs  = len(inputs)
     Noutputs = len(outputs)
     if empirical:
         tic = time.perf_counter()
         # Simulate data
-        dX = SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, simFromMA, 314)
+        dX = SimModel(modelInfo, mZs, Npd, Nsim, simFromMA, 314)
 
         # Compute muhat and average over draws
-        toret = np.mean(compute_muhat(runcode, dX), axis=1)
+        toret = np.mean(compute_muhat(modelInfo, dX), axis=1)
         if verbose:
             print("Moments: %f" % (time.perf_counter()-tic))
 
     # Analytical
     else:
         tic = time.perf_counter()
-        toret = h_analytical(G, inputs, outputs, mZs, runcode)
+        toret = h_analytical(modelInfo, mZs)
         if verbose:
             print("Moments: %f" % (time.perf_counter()-tic))
 
@@ -543,12 +939,26 @@ def paramsDefaults(runcode):
         phi0        = 1.5
         theta0      = [phi0]
         shock_param = [False]
-    elif runcode == 1:
+    elif (runcode == 1) or (runcode == 2) or (runcode == 5):
         phi0        = 1.5
         kappap0     = 0.1
         rho_Z0      = 0.85
         theta0      = [phi0, kappap0, rho_Z0]
         shock_param = [False, False, False]
+
+    elif (runcode == 3) or (runcode == 4):
+        phi0            = 1.5
+        kappap0         = 0.1
+        rho_Z0          = 0.85
+        kappaw0         = 0.1
+        rho_rstar0      = 0.85
+        rho_beta0       = 0.85
+        sigma_Z0        = 0.01
+        sigma_rstar0    = 0.01
+        sigma_beta0     = 0.01
+        theta0 = [phi0, kappap0, rho_Z0,
+                  kappaw0, rho_rstar0, rho_beta0, sigma_Z0, sigma_rstar0, sigma_beta0]
+        shock_param = [False for i in range(len(theta0))]
 
     return np.array(theta0), np.array(shock_param)
 
@@ -566,6 +976,37 @@ def paramsCheckID(runcode):
         # Put everything together
         thetas = [phis, kappaps, rho_Zs]
 
+    elif (runcode == 2) or (runcode == 5):
+        phis     = np.linspace(start=1.01, stop=1.9, num=20)
+        kappaps  = np.linspace(start=.01, stop=0.2, num=20)
+        rho_Zs   = np.linspace(start=0.05, stop=0.95, num=20)
+
+        # Put everything together
+        thetas = [phis, kappaps, rho_Zs]
+
+    elif (runcode == 3) or (runcode == 4):
+        phis     = np.linspace(start=1.01, stop=1.9, num=20)
+        kappaps  = np.linspace(start=.01, stop=0.2, num=20)
+        rho_Zs   = np.linspace(start=0.05, stop=0.95, num=20)
+
+        kappaws      = np.linspace(start=.01, stop=0.2, num=20)
+        rho_rstars   = np.linspace(start=0.05, stop=0.95, num=20)
+        rho_betas    = np.linspace(start=0.05, stop=0.95, num=20)
+        sigma_Zs     = np.linspace(start=0.001, stop=0.1, num=20)
+        sigma_rstars = np.linspace(start=0.001, stop=0.1, num=20)
+        sigma_betas  = np.linspace(start=0.001, stop=0.1, num=20)
+
+        # eiss     = np.linspace(start=0.1, stop=2, num=20)
+        # deltas   = np.linspace(start=0.05, stop=0.1, num=20)
+        # alphas   = np.linspace(start=0.2, stop=0.45, num=20)
+        # frischs  = np.linspace(start=0.5, stop=2, num=20)
+
+        # Put everything together
+        thetas = [phis, kappaps, rho_Zs,
+                  kappaws, rho_rstars, rho_betas, sigma_Zs, sigma_rstars,
+                  sigma_betas]
+
+
     theta0, shock_param = paramsDefaults(runcode)
 
     return np.array(thetas), theta0
@@ -573,21 +1014,38 @@ def paramsCheckID(runcode):
 
 
 def getruncodeFeatures(runcode):
-    exogenous = ['Z', 'rstar', 'G']
-    # exogenous = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
+    if (runcode == 2) or (runcode == 3) or (runcode == 4) or (runcode == 5):
+        exogenous = ['Z', 'rstar', 'G', 'markup', 'markup_w', 'beta', 'rinv_shock']
+        outputs   = ['Y', 'pi', 'r', 'C', 'I', 'i',
+                     'Beta_C_ZM', 'Beta_C_A', 'Beta_C_B', 'Beta_A_ZM', 'Corr_A_ZM',
+                     'Beta_B_ZM', 'Corr_B_ZM', 'Beta_A_ZMY', 'Beta_B_ZMY']
+    else:
+        exogenous = ['Z', 'rstar', 'G']
+        outputs = ['Y', 'r', 'pi', 'Beta_C_ZM', 'Beta_C_A', 'Beta_C_B']
+        # outputs = ['Y', 'C', 'K']
 
     unknowns  = ['Y', 'r', 'w']
     targets = ['asset_mkt', 'fisher', 'wnkpc']
 
-    outputs = ['Y', 'r', 'pi', 'BetaCZ', 'BetaCA', 'BetaCB']
-    # outputs = ['Y', 'C', 'K']
     theta0, shock_param  = paramsDefaults(runcode)
 
     block_list = [household_inc, pricing, arbitrage, production,
                   dividend, taylor, fiscal, finance, wage, union, mkt_clearing,
-                  microBetaCZ, microBetaCA, microBetaCB]
+                  microBeta_C_ZM, microBeta_C_A, microBeta_C_B,
+                  microBeta_A_ZM, microCorr_A_ZM,
+                  microBeta_B_ZM, microCorr_B_ZM,
+                  microBeta_A_ZMY, microBeta_B_ZMY]
 
-    return exogenous, unknowns, targets, outputs, theta0, shock_param, block_list
+    dt = {'exogenous'   : exogenous,
+          'unknowns'    : unknowns,
+          'targets'     : targets,
+          'outputs'     : outputs,
+          'theta0'      : theta0,
+          'shock_param' : shock_param,
+          'block_list'  : block_list,
+          'T'           : 300}
+
+    return dt
 
 
 
@@ -608,34 +1066,86 @@ def quadratic_form(h, W):
 ########################################################################
 
 
-def muhatsSimSave(runcode, T, Npd, Nsim, fromMA, save=True, verbose=False, seed=314):
+def muhatsSim(runcode, Npd, Nsim, fromMA, save=True, verbose=False, seed=314):
 
-    # Solve for steady state
-    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
-    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta0, T, [], inputs, outputs, unknowns, targets, block_list, False)
+    # Initailize model
+    modelInfo = SolveModel({'runcode' : runcode}, True)
 
     # Get MA coefficients
-    mZs = getShockMACoeffs(runcode, T)
+    mZs = getShockMACoeffs(modelInfo)
 
     # Simulate aggregates
     tic = time.perf_counter()
-    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
-    dY      = SimModel(ss, G, Npd, T, Nsim, inputs, outputs, mZs, fromMA, seed)
-    dY_dict = SimsArrayToDict(dY, outputs)
+    dY      = SimModel(modelInfo, mZs, Npd, Nsim, fromMA, seed)
+    dY_dict = SimsArrayToDict(dY, modelInfo['outputs'])
     if verbose:
         print(time.perf_counter()-tic)
 
     # Compute moments
-    muhats = compute_muhat(runcode, dY)
+    muhats = compute_muhat(modelInfo, dY)
 
     # Save moments
-    strSave  = getStrSave(runcode, T, Npd, Nsim, fromMA)
+    strSave  = getStrSave(runcode, modelInfo['T'], Npd, Nsim, fromMA)
     savepath = "./Results/muhats_" + strSave + ".npy"
     np.save(savepath, muhats)
 
     return muhats
 
 
+########################################################################
+## Identification Plots ################################################
+########################################################################
+
+# Identification plots
+def identificationPlots(runcode, Npd):
+
+    # INITIALIZE
+    print("Initializing Model...")
+    modelInfo = SolveModel({'runcode' : runcode}, True)
+
+    # Get parameters to loop over
+    thetas, theta0 = paramsCheckID(runcode)
+    Nparams = len(thetas)
+
+    # Evaluate at initial parameters
+    print("Getting moments at initial params")
+    hempirical = False
+    hsimFromMA = False
+    Nsim       = 1000
+    Nmoments   = len(h(modelInfo, theta0, Npd, hempirical, hsimFromMA, Nsim, False))
+
+    # Loop over parameters
+    labs = GetIdentificationLabels(runcode, list(modelInfo['outputs_all']))
+    plt.close('all')
+    for p in range(Nparams):
+        print("Param %d / %d..." % (p+1, Nparams))
+
+        # Set everything to defaults to start
+        theta = copy.deepcopy(theta0)
+        # print(theta0)
+
+        # Create array to hold values of moments across different parameter vals
+        h_ = np.zeros((Nmoments, len(thetas[p])))
+
+        # Loop over values in identification range
+        for i in range(len(thetas[p])):
+            # Set that parameter
+            theta[p] = thetas[p][i]
+            print(theta)
+
+            # Compute h
+            h_[:,i] = h(modelInfo, theta,  Npd, hempirical, hsimFromMA, Nsim, False)
+
+        # Plot identification plots by moment
+        for m in range(Nmoments):
+            # plt.subplot(np.round(np.ceil(Nmoments/4)), 4, m+1)
+            plt.plot(h_[m,:])
+            plt.title(labs[m])
+            plt.savefig("Plots/Param%d_%s.pdf" % (p+1,labs[m]))
+            plt.close('all')
+            # plt.show()
+
+        # print(h_)
 
 
 
