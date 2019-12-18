@@ -635,7 +635,7 @@ def h_analytical(modelInfo, mZs):
         muhats[ind+7] = Sigma[0, ind_Corr_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Corr_A_ZM , ind_Corr_A_ZM ] * Sigma[0,ind_Y,ind_Y])
         muhats[ind+8] = Sigma[0, ind_Corr_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Corr_B_ZM , ind_Corr_B_ZM ] * Sigma[0,ind_Y,ind_Y])
 
-    elif (runcode == 2) or (runcode == 3):
+    elif (runcode == 4) or (runcode == 5):
         muhats = np.zeros(19)
 
         # Indices of exogenous aggregates
@@ -684,10 +684,10 @@ def h_analytical(modelInfo, mZs):
 
         # Corr of reg/corr coeffs and Y
         ind= ind + 1
-        muhats[ind+3] = Sigma[0, ind_Beta_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZM , ind_Beta_A_ZM ] * Sigma[0,ind_Y,ind_Y])
-        muhats[ind+4] = Sigma[0, ind_Beta_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ] * Sigma[0,ind_Y,ind_Y])
-        muhats[ind+5] = Sigma[0, ind_Beta_A_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZMY, ind_Beta_A_ZMY] * Sigma[0,ind_Y,ind_Y])
-        muhats[ind+6] = Sigma[0, ind_Beta_B_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZMY, ind_Beta_B_ZMY] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+0] = Sigma[0, ind_Beta_A_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZM , ind_Beta_A_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+1] = Sigma[0, ind_Beta_B_ZM , ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZM , ind_Beta_B_ZM ] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+2] = Sigma[0, ind_Beta_A_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_A_ZMY, ind_Beta_A_ZMY] * Sigma[0,ind_Y,ind_Y])
+        muhats[ind+3] = Sigma[0, ind_Beta_B_ZMY, ind_Y] / np.sqrt(Sigma[0, ind_Beta_B_ZMY, ind_Beta_B_ZMY] * Sigma[0,ind_Y,ind_Y])
 
 
     elif runcode == 1:
@@ -723,7 +723,6 @@ def h_analytical(modelInfo, mZs):
         muhats[ind]   = Sigma[0, ind_bCZ, ind_bCZ]
         muhats[ind+1] = Sigma[0, ind_bCA, ind_bCA]
         muhats[ind+2] = Sigma[0, ind_bCB, ind_bCB]
-
 
     return muhats
 
@@ -872,30 +871,43 @@ def h(modelInfo, theta, Npd, empirical=False, simFromMA=False, Nsim=1000, verbos
 ########################################################################
 
 
-def MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, hempirical, hfromMA, Nsim, muhat, Vhat, Nobs, lamb, l, u, fullyFeasible):
-    cv       = 1.96
-    h_       = lambda theta: h(runcode, theta, T, ss, Npd, inputs, outputs, unknowns, targets, block_list, hempirical, hfromMA, 200, False)
-    h_theta0 = h_(theta0)
-    h__      = lambda theta: h_(theta).reshape((len(h_theta0),1))
-    Gfcn_    = lambda theta: wcopt.ComputeG(h__,theta)
-    res      = wcopt.TestSingle(muhat, Vhat, Nobs, lamb, theta0, theta0, cv, l, u, fullyFeasible, Gfcn_, h__, True, True)
+def MomentMatch(runcode, exogenous, unknowns, targets, outputs, theta0, block_list, T, ss, G, Npd, Nsim, hempirical, hfromMA, muhat, Vhat, Nobs, lamb, l, u, fullyFeasible):
+
+    cv        = 1.96
+    modelInfo = {\
+                'runcode' : runcode,
+                'exogenous' : exogenous,
+                'unknowns' : unknowns,
+                'targets' : targets,
+                'outputs' : outputs,
+                'theta0' : theta0,
+                'block_list' : block_list,
+                'T' : T,
+                'ss' : ss,
+                'G' : G
+                }
+    h_        = lambda theta: h(modelInfo, theta, Npd, hempirical, hfromMA, 200, False)
+    h_theta0  = h_(modelInfo['theta0'])
+    h__       = lambda theta: h_(theta).reshape((len(h_theta0),1))
+    Gfcn_     = lambda theta: wcopt.ComputeG(h__,theta)
+    res       = wcopt.TestSingle(muhat, Vhat, Nobs, lamb, modelInfo['theta0'], modelInfo['theta0'], cv, l, u, fullyFeasible, Gfcn_, h__, True, True)
     return res
 
 
 
-def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparallel=0, seed=314):
+def MomentMatchRuns(runcode, Npd, Nsim, fromMA, hempirical, hfromMA, nparallel=0, seed=314):
+
+    # INITIALIZE
+    modelInfo = SolveModel({'runcode' : runcode}, True) # Shouldn't be initializing at this step
+    K = len(modelInfo['theta0'])
+    I = np.eye(K)
+
+
     # Load simulated moments for matching
-    strSave  = getStrSave(runcode, T, Npd, Nsim, fromMA)
+    strSave  = getStrSave(runcode, modelInfo['T'], Npd, Nsim, fromMA)
     savepath = "./Results/muhats_" + strSave + ".npy"
     muhats   = np.load(savepath)
 
-    # Some info to start
-    inputs, unknowns, targets, outputs, theta0, shock_param, block_list = getruncodeFeatures(runcode)
-    K = len(theta0)
-    I = np.eye(K)
-
-    # Solve for steady state
-    ss, G, inputs, outputs_all, block_list = SolveModel(runcode, theta0, T, [], inputs, outputs, unknowns, targets, block_list, False)
 
     # Setup up parallel pool
     if nparallel != 0:
@@ -904,8 +916,12 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparalle
     # Compute Vhat to use for each, so we won't do fully feasible
     Nobs = 1
     Vhat = Nobs*np.cov(muhats)
-    l = np.array([1.05, 0.05, 0.05]).reshape((3,1))
-    u = np.array([3, 5, 0.95]).reshape((3,1))
+    if (runcode == 4):
+      l = np.array([1.05, 0.05, 0.05, 0.02, 0.05, 0.05, 0.005, 0.005, 0.005]).reshape((9,1))
+      u = np.array([3,       5, 0.95,    3, 0.95, 0.95,   0.5,   0.5, 0.5]).reshape((9,1))
+    else:
+      l = np.array([1.05, 0.05, 0.05]).reshape((3,1))
+      u = np.array([3, 5, 0.95]).reshape((3,1))
     res = [[] for k in range(K)]
     for k in range(K):
         print("\tParam %d / %d" % (k+1, K))
@@ -914,12 +930,18 @@ def MomentMatchRuns(runcode, T, Npd, Nsim, fromMA, hempirical, hfromMA, nparalle
             for s in range(Nsim):
                 print("Matching Simulation %d / %d" % (s+1, Nsim))
 
-                res[k].append(MomentMatch(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
-                                          block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False))
+                res[k].append(MomentMatch(modelInfo['runcode'], modelInfo['exogenous'], modelInfo['unknowns'],
+                                          modelInfo['targets'], modelInfo['outputs'], modelInfo['theta0'],
+                                          modelInfo['block_list'], modelInfo['T'], modelInfo['ss'], modelInfo['G'],
+                                          Npd, Nsim, hempirical, hfromMA, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False))
         else:
             pool = mp.Pool(nparallel)
-            res[k] = pool.starmap(MomentMatch, [(runcode, theta0, T, ss, Npd, inputs, outputs, unknowns, targets,
-                                                 block_list, hempirical, hfromMA, Nsim, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)])
+            res[k] = pool.starmap(MomentMatch,
+                                  [(modelInfo['runcode'], modelInfo['exogenous'], modelInfo['unknowns'],
+                                    modelInfo['targets'], modelInfo['outputs'], modelInfo['theta0'],
+                                    modelInfo['block_list'], modelInfo['T'], modelInfo['ss'], modelInfo['G'],
+                                    Npd, Nsim, hempirical, hfromMA, muhats[:,s], Vhat, Nobs, I[:,k:(k+1)], l, u, False) for s in range(Nsim)]
+                                  )
             pool.close()
 
     np.save("res_" + strSave + ".npy", res)
