@@ -917,11 +917,11 @@ def MomentMatchRuns(runcode, Npd, Nsim, fromMA, hempirical, hfromMA, nparallel=0
     Nobs = 1
     Vhat = Nobs*np.cov(muhats)
     if (runcode == 4):
-      l = np.array([1.05, 0.05, 0.05, 0.02, 0.05, 0.05, 0.005, 0.005, 0.005]).reshape((9,1))
-      u = np.array([3,       5, 0.95,    3, 0.95, 0.95,   0.5,   0.5, 0.5]).reshape((9,1))
+      l = np.array([1.10, 0.001, 0.10, 0.001, 0.10, 0.10, 0.001, 0.001, 0.001]).reshape((9,1))
+      u = np.array([3,       1,  0.99,    1,  0.99, 0.99,   0.5,   0.5, 0.5]).reshape((9,1))
     else:
-      l = np.array([1.05, 0.05, 0.05]).reshape((3,1))
-      u = np.array([3, 5, 0.95]).reshape((3,1))
+      l = np.array([1.05, 0.001, 0.10]).reshape((3,1))
+      u = np.array([3,        1, 0.99]).reshape((3,1))
     res = [[] for k in range(K)]
     for k in range(K):
         print("\tParam %d / %d" % (k+1, K))
@@ -999,24 +999,24 @@ def paramsCheckID(runcode):
         thetas = [phis, kappaps, rho_Zs]
 
     elif (runcode == 2) or (runcode == 5):
-        phis     = np.linspace(start=1.01, stop=1.9, num=20)
-        kappaps  = np.linspace(start=.01, stop=0.2, num=20)
-        rho_Zs   = np.linspace(start=0.05, stop=0.95, num=20)
+        phis     = np.linspace(start=1.10, stop=3, num=20)
+        kappaps  = np.linspace(start=.001, stop=1, num=20)
+        rho_Zs   = np.linspace(start=0.10, stop=0.99, num=20)
 
         # Put everything together
         thetas = [phis, kappaps, rho_Zs]
 
     elif (runcode == 3) or (runcode == 4):
-        phis     = np.linspace(start=1.01, stop=1.9, num=20)
-        kappaps  = np.linspace(start=.01, stop=0.2, num=20)
-        rho_Zs   = np.linspace(start=0.05, stop=0.95, num=20)
+        phis     = np.linspace(start=1.10, stop=3, num=20)
+        kappaps  = np.linspace(start=.001, stop=1, num=20)
+        rho_Zs   = np.linspace(start=0.10, stop=0.99, num=20)
 
-        kappaws      = np.linspace(start=.01, stop=0.2, num=20)
-        rho_rstars   = np.linspace(start=0.05, stop=0.95, num=20)
-        rho_betas    = np.linspace(start=0.05, stop=0.95, num=20)
-        sigma_Zs     = np.linspace(start=0.001, stop=0.1, num=20)
-        sigma_rstars = np.linspace(start=0.001, stop=0.1, num=20)
-        sigma_betas  = np.linspace(start=0.001, stop=0.1, num=20)
+        kappaws      = np.linspace(start=.001, stop=1, num=20)
+        rho_rstars   = np.linspace(start=0.1, stop=0.99, num=20)
+        rho_betas    = np.linspace(start=0.1, stop=0.99, num=20)
+        sigma_Zs     = np.linspace(start=0.001, stop=0.5, num=20)
+        sigma_rstars = np.linspace(start=0.001, stop=0.5, num=20)
+        sigma_betas  = np.linspace(start=0.001, stop=0.5, num=20)
 
         # eiss     = np.linspace(start=0.1, stop=2, num=20)
         # deltas   = np.linspace(start=0.05, stop=0.1, num=20)
