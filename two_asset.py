@@ -9,7 +9,6 @@ from solved_block import solved
 
 '''Part 1: HA block'''
 
-
 @het(exogenous='Pi', policy=['b', 'a'], backward=['Vb', 'Va'])  # order as in grid!
 def household(Va_p, Vb_p, Pi_p, a_grid, b_grid, z_grid, e_grid, k_grid, beta, eis, rb, ra, chi0, chi1, chi2, Y):
     # get grid dimensions
@@ -55,16 +54,24 @@ def household(Va_p, Vb_p, Pi_p, a_grid, b_grid, z_grid, e_grid, k_grid, beta, ei
     a2 = a**2
     b2 = b**2
     c2 = c**2
-    z2 = (np.ones((nZ, nB, nA))*z_grid[:,np.newaxis, np.newaxis])**2
 
-    cz = c * z_grid[:,np.newaxis, np.newaxis]
-    az = a * z_grid[:,np.newaxis, np.newaxis]
-    bz = b * z_grid[:,np.newaxis, np.newaxis]
-    ac = a * c
-    bc = b * c
-    ab = a * b
+    zm  = (np.ones((nZ, nB, nA))*z_grid[:,np.newaxis, np.newaxis])
+    zm2 = zm**2
 
-    return Va, Vb, a, b, c, u,   a2, b2, c2, z2, cz, az, bz, ac, bc, ab
+    c_zm = c * z_grid[:,np.newaxis, np.newaxis]
+    a_zm = a * z_grid[:,np.newaxis, np.newaxis]
+    b_zm = b * z_grid[:,np.newaxis, np.newaxis]
+    a_c  = a * c
+    b_c  = b * c
+    a_b  = a * b
+
+    zmY   = zm*Y
+    zmY2  = zmY**2
+    a_zmY = a*zmY
+    b_zmY = b*zmY
+
+    return Va, Vb, a, b, c, u,   a2, b2, c2, zm, zm2, c_zm, a_zm, b_zm, a_c, b_c, a_b,   zmY, zmY2, a_zmY, b_zmY
+
 
 
 def post_decision_vfun(Va_p, Vb_p, Pi, beta):
@@ -284,26 +291,58 @@ def finance(i, p, pi, r, div, omega, pshare):
 
 # For getting regression coeff of consumption on income
 @simple
-def microBetaCZ(C, Z, Z2, CZ):
-    BetaCZ = (CZ - C*Z) / (Z2 - Z**2)
-    return BetaCZ
+def microBeta_C_ZM(C, ZM, ZM2, C_ZM):
+    Beta_C_ZM = (C_ZM - C*ZM) / (ZM2 - ZM**2)
+    return Beta_C_ZM
 
 @simple
-def microBetaCA(C, A, A2, AC):
-    BetaCA = (AC - A*C) / (A2 - A**2)
-    return BetaCA
+def microBeta_C_A(C, A, A2, A_C):
+    Beta_C_A = (A_C - A*C) / (A2 - A**2)
+    return Beta_C_A
 
 @simple
-def microBetaCB(C, B, B2, BC):
-    BetaCB = (BC - B*C) / (B2 - B**2)
-    return BetaCB
+def microBeta_C_B(C, B, B2, B_C):
+    Beta_C_B = (B_C - B*C) / (B2 - B**2)
+    return Beta_C_B
+
+
+@simple
+def microBeta_A_ZM(A, ZM, ZM2, A_ZM):
+    Beta_A_ZM = (A_ZM - A*ZM) / (ZM2 - ZM**2)
+    return Beta_A_ZM
+
+@simple
+def microCorr_A_ZM(A, A2, ZM, ZM2, A_ZM):
+    Corr_A_ZM = (A_ZM - A*ZM) / (np.sqrt(ZM2 - ZM**2) * np.sqrt(A2 - A**2))
+    return Corr_A_ZM
+
+@simple
+def microBeta_B_ZM(B, ZM, ZM2, B_ZM):
+    Beta_B_ZM = (B_ZM - B*ZM) / (ZM2 - ZM**2)
+    return Beta_B_ZM
+
+@simple
+def microCorr_B_ZM(B, B2, ZM, ZM2, B_ZM):
+    Corr_B_ZM = (B_ZM - B*ZM) / (np.sqrt(ZM2 - ZM**2) * np.sqrt(B2 - B**2))
+    return Corr_B_ZM
+
+@simple
+def microBeta_A_ZMY(A_ZMY, A, ZMY, ZMY2):
+    Beta_A_ZMY = (A_ZMY - A*ZMY) / (ZMY2 - ZMY**2)
+    return Beta_A_ZMY
+
+@simple
+def microBeta_B_ZMY(B_ZMY, B, ZMY, ZMY2):
+    Beta_B_ZMY = (B_ZMY - B*ZMY) / (ZMY2 - ZMY**2)
+    return Beta_B_ZMY
+
+
 
 @simple
 def wage(pi, w, N, muw, kappaw):
     piw = (1 + pi) * w / w(-1) - 1
     psiw = muw / (1 - muw) / 2 / kappaw * np.log(1 + piw) ** 2 * N
     return piw, psiw
-
 
 @simple
 def union(piw, N, tax, w, U, kappaw, muw, vphi, frisch, beta, markup_w):
