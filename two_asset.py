@@ -58,19 +58,23 @@ def household(Va_p, Vb_p, Pi_p, a_grid, b_grid, z_grid, e_grid, k_grid, beta, ei
     zm  = (np.ones((nZ, nB, nA))*z_grid[:,np.newaxis, np.newaxis])
     zm2 = zm**2
 
-    c_zm = c * z_grid[:,np.newaxis, np.newaxis]
-    a_zm = a * z_grid[:,np.newaxis, np.newaxis]
-    b_zm = b * z_grid[:,np.newaxis, np.newaxis]
-    a_c  = a * c
-    b_c  = b * c
-    a_b  = a * b
+    czm = c * z_grid[:,np.newaxis, np.newaxis]
+    azm = a * z_grid[:,np.newaxis, np.newaxis]
+    bzm = b * z_grid[:,np.newaxis, np.newaxis]
+    ac  = a * c
+    bc  = b * c
+    ab  = a * b
 
-    zmY   = zm*Y
-    zmY2  = zmY**2
-    a_zmY = a*zmY
-    b_zmY = b*zmY
+    zmY  = zm*Y
+    zmY2 = zmY**2
+    azmY = azm*Y
+    bzmY = bzm*Y
 
-    return Va, Vb, a, b, c, u,   a2, b2, c2, zm, zm2, c_zm, a_zm, b_zm, a_c, b_c, a_b,   zmY, zmY2, a_zmY, b_zmY
+    aY   = a*Y
+    bY   = b*Y
+
+
+    return Va, Vb, a, b, c, u,   a2, b2, c2, zm, zm2, czm, azm, bzm, ac, bc, ab,   zmY, zmY2, azmY, bzmY,  aY, bY
 
 
 
@@ -258,84 +262,51 @@ def finance(i, p, pi, r, div, omega, pshare):
     return rb, ra, fisher
 
 
-# @simple
-# def microVarA(A, A2):
-    # VarA = A2 - A**2
-    # return VarA
-
-# @simple
-# def microVarB(B, B2):
-    # VarB = B2 - B**2
-    # return VarB
-
-# @simple
-# def microVarC(C, C2):
-    # VarC = C2 - C**2
-    # return VarC
-
-# @simple
-# def microCovAC(A, C, AC):
-    # CovAC = AC - C*A
-    # return CovAC
-
-# @simple
-# def microCovBC(B, C, BC):
-    # CovBC = BC - B*C
-    # return CovBC
-
-# @simple
-# def microCovCZ(C, Z, CZ):
-    # CovCZ = CZ - C*Z
-    # return CovCZ
-
-
-# For getting regression coeff of consumption on income
-@simple
-def microBeta_C_ZM(C, ZM, ZM2, C_ZM):
-    Beta_C_ZM = (C_ZM - C*ZM) / (ZM2 - ZM**2)
-    return Beta_C_ZM
 
 @simple
-def microBeta_C_A(C, A, A2, A_C):
-    Beta_C_A = (A_C - A*C) / (A2 - A**2)
-    return Beta_C_A
+def microMoments(A, B, C, ZM, ZMY, A2, B2, C2, ZM2, ZMY2, AC, BC, AZM, BZM, CZM, AZMY, BZMY, Y):
 
-@simple
-def microBeta_C_B(C, B, B2, B_C):
-    Beta_C_B = (B_C - B*C) / (B2 - B**2)
-    return Beta_C_B
+    # Variance of individual state variables
+    Var_a   = A2  - A**2      # Var_t(a)
+    Var_b   = B2  - B**2      # Var_t(b)
+    Var_c   = C2  - C**2      # Var_t(c)
+    Var_zm  = ZM2 - ZM**2     # Var_t(zm)
+    Var_zmY = ZMY2 - ZMY**2   # Var_t(zmY)
 
 
-@simple
-def microBeta_A_ZM(A, ZM, ZM2, A_ZM):
-    Beta_A_ZM = (A_ZM - A*ZM) / (ZM2 - ZM**2)
-    return Beta_A_ZM
+    # Covariance and correlation of individual state variables
+    Cov_c_a    = AC - A*C           # Cov_t(c,a)
+    Cov_c_b    = BC - B*C           # Cov_t(c,b)
+    Cov_a_zm   = AZM - A*ZM         # Cov_t(a,y)
+    Cov_b_zm   = BZM - B*ZM         # Cov_t(b,y)
+    Cov_c_zm   = CZM - C*ZM         # Cov_t(c,y)
+    Cov_a_zmY  = AZMY - A*ZMY       # Cov_t(a,yY)
+    Cov_b_zmY  = BZMY - B*ZMY       # Cov_t(a,yY)
+    Y_Cov_a_zm = Y*(AZM - A*ZM)     # Y_t*Cov_t(a,y)
+    Y_Cov_b_zm = Y*(BZM - B*ZM)     # Y_t*Cov_t(b,y)
+    Y_Cov_c_zm = Y*(CZM - C*ZM)     # Y_t*Cov_t(c,y)
 
-@simple
-def microCorr_A_ZM(A, A2, ZM, ZM2, A_ZM):
-    Corr_A_ZM = (A_ZM - A*ZM) / (np.sqrt(ZM2 - ZM**2) * np.sqrt(A2 - A**2))
-    return Corr_A_ZM
 
-@simple
-def microBeta_B_ZM(B, ZM, ZM2, B_ZM):
-    Beta_B_ZM = (B_ZM - B*ZM) / (ZM2 - ZM**2)
-    return Beta_B_ZM
+    Corr_a_zm  = Cov_a_zm / np.sqrt(Var_a * Var_zm)    # Corr_t(a,y)
+    Corr_b_zm  = Cov_b_zm / np.sqrt(Var_b * Var_zm)    # Corr_t(b,y)
 
-@simple
-def microCorr_B_ZM(B, B2, ZM, ZM2, B_ZM):
-    Corr_B_ZM = (B_ZM - B*ZM) / (np.sqrt(ZM2 - ZM**2) * np.sqrt(B2 - B**2))
-    return Corr_B_ZM
+    Corr_c_a   = Cov_c_a / np.sqrt(Var_a * Var_c)    # Corr_t(a,y)
+    Corr_c_b   = Cov_c_b / np.sqrt(Var_b * Var_c)    # Corr_t(b,y)
 
-@simple
-def microBeta_A_ZMY(A_ZMY, A, ZMY, ZMY2):
-    Beta_A_ZMY = (A_ZMY - A*ZMY) / (ZMY2 - ZMY**2)
-    return Beta_A_ZMY
 
-@simple
-def microBeta_B_ZMY(B_ZMY, B, ZMY, ZMY2):
-    Beta_B_ZMY = (B_ZMY - B*ZMY) / (ZMY2 - ZMY**2)
-    return Beta_B_ZMY
+    Y2_Var_zm  = (Y**2)*Var_zm      # Y_t^2 * Var_t(y)
 
+
+    # Within-period regression coefficients
+    Beta_c_zm  = Cov_c_zm / Var_zm   # Cov_t(c,y) / Var_t(y)
+    Beta_c_a   = Cov_c_a  / Var_a    # Cov_t(c,a) / Var_t(a)
+    Beta_c_b   = Cov_c_b  / Var_b    # Cov_t(c,b) / Var_t(b)
+    Beta_a_zm  = Cov_a_zm / Var_zm   # Cov_t(a,y) / Var_t(y)
+    Beta_b_zm  = Cov_b_zm / Var_zm   # Cov_t(b,y) / Var_t(y)
+    Beta_a_zmY = Cov_a_zmY / Var_zmY # Cov_t(a,yY) / Var_t(yY)
+    Beta_b_zmY = Cov_b_zmY / Var_zmY # Cov_t(b,yY) / Var_t(yY)
+
+    return Var_a, Var_b, Var_c, Var_zm, Var_zmY, Cov_c_a, Cov_c_b, Cov_a_zm, Cov_b_zm, Cov_c_zm, Cov_a_zmY, Cov_b_zmY, Y_Cov_a_zm, Y_Cov_b_zm, Y_Cov_c_zm, Corr_a_zm, Corr_b_zm, Corr_c_a, Corr_c_b, Y2_Var_zm, Beta_c_zm, Beta_c_a, Beta_c_b, Beta_a_zm, Beta_b_zm, Beta_a_zmY, Beta_b_zmY
 
 
 @simple
@@ -366,7 +337,7 @@ production = solved(block_list=[labor, investment],
 
 def hank_ss(beta_guess=0.976, vphi_guess=2.07, chi1_guess=6.5, r=0.0125, tot_wealth=14, K=10, delta=0.02, kappap=0.1,
             muw=1.1, Bh=1.04, Bg=2.8, G=0.2, eis=0.5, frisch=1, chi0=0.25, chi2=2, epsI=4, omega=0.005, kappaw=0.1,
-            phi=1.5, nZ=3, nB=50, nA=70, nK=50, bmax=50, amax=4000, kmax=1, rho_z=0.966, sigma_z=0.92, noisy=True):
+            phi=1.5, nZ=3, nB=50, nA=70, nK=50, bmax=50, amax=4000, kmax=1, rho_z=0.966, sigma_z=0.92, noisy=True, **kwargs):
     """Solve steady state of full GE model. Calibrate (beta, vphi, chi1, alpha, mup, Z) to hit targets for
        (r, tot_wealth, Bh, K, Y=N=1).
     """
@@ -427,5 +398,11 @@ def hank_ss(beta_guess=0.976, vphi_guess=2.07, chi1_guess=6.5, r=0.0125, tot_wea
                'beta': beta, 'vphi': vphi, 'omega': omega, 'alpha': alpha, 'delta': delta, 'mup': mup, 'muw': muw,
                'frisch': frisch, 'epsI': epsI, 'a_grid': a_grid, 'b_grid': b_grid, 'z_grid': z_grid, 'e_grid': e_grid,
                'markup': 0, 'markup_w': 0, 'rinv_shock': 0,
-               'k_grid': k_grid, 'Pi': Pi, 'kappap': kappap, 'kappaw': kappaw, 'pshare': pshare, 'rstar': r, 'i': r})
+               'k_grid': k_grid, 'Pi': Pi, 'kappap': kappap, 'kappaw': kappaw, 'pshare': pshare, 'rstar': r, 'i': r
+               })
+    ss.update({'Y_Cov_a_zm' : (ss['AZM'] - ss['ZM']*ss['A'])*ss['Y'],
+               'Y_Cov_b_zm' : (ss['BZM'] - ss['ZM']*ss['B'])*ss['Y'],
+               'Y2_Var_zm'  : (ss['ZM2'] - ss['ZM']**2)*(ss['Y']**2)
+               })
+
     return ss
